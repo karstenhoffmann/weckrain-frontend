@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.9.0
+  Version: 1.10.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.9.0";
+    const FRONTEND_VERSION = "1.10.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -316,7 +316,10 @@
       stand: {},
       graze: { neck: 62, head: 6, fH1: -3, fH2: 4 },
       alert: { neck: -12, head: -6, earL: -12, earR: -12 },
-      sniff: { pitch: 3, neck: 48, head: -26, earL: -6, earR: -6, fH1: -4 },
+      sniff: { pitch: 3, neck: 51, head: -26, earL: -6, earR: -6, fH1: -4 },
+      // Sitzen: Po am Boden, Brust aufgerichtet, Vorderbeine gestreckt, Hinterbeine gefaltet
+      sit:   { bodyY: 6.4, pitch: -35, neck: 2, head: -2, fH1: -7, fK1: 2, fH2: -3, fK2: 1,
+               hH1: -102, hK1: 26, hH2: -97, hK2: 22, tail: 30 },
       lie:   Object.assign({ bodyY: 9.5, neck: 4, head: -4 }, P3_LIE),
       sleep: Object.assign({ bodyY: 9.5, neck: 44, head: -8, neckYaw: -25, headRoll: 10, earL: 22, earR: 22, eyes: 1 }, P3_LIE),
     };
@@ -334,6 +337,7 @@
       sniff:  ["sniff", 3, 5, 1.3],
       walk:   ["stand", 20, 20, 2.6],
       rest:   ["lie", 25, 45, 0.5],
+      sit:    ["sit", 12, 25, 0.8],
     };
     const P3_LOOK_SEQ = [[0, "pt", 60, 45], [1.7, "viewer"], [3.6, "back"], [5.6, "pt", 60, 22]];
 
@@ -342,6 +346,23 @@
     const c3 = (v, a, b) => Math.max(a, Math.min(b, v));
     const r3 = (a, b) => a + Math.random() * (b - a);
     const rad = (d) => d * Math.PI / 180;
+
+    // Hinterbein-Kinematik fürs Hinsetzen/Aufstehen (Winkel in Grad, Richtung eines Segments: (-sin a, -cos a))
+    const LEG_H = [6.8, 6.45];   // Oberschenkel, Unterschenkel bis Hufmitte
+    const hipAt = (legX, hipY, bodyY, pitch) => {
+      const pa = -rad(pitch), lx = legX + 2, ly = hipY - 18;
+      return [-2 + lx * Math.cos(pa) - ly * Math.sin(pa), 18 - bodyY + lx * Math.sin(pa) + ly * Math.cos(pa)];
+    };
+    const hoofAt = (hip, h, k) => [hip[0] - LEG_H[0] * Math.sin(rad(h)) - LEG_H[1] * Math.sin(rad(h + k)),
+                                   hip[1] - LEG_H[0] * Math.cos(rad(h)) - LEG_H[1] * Math.cos(rad(h + k))];
+    // Zwei-Gelenk-IK: Knie knickt nach vorn (k > 0)
+    const legIK = (hip, tgt) => {
+      const vx = tgt[0] - hip[0], vy = tgt[1] - hip[1], [a, b] = LEG_H;
+      const D = c3(Math.hypot(vx, vy), Math.abs(a - b) + 0.01, a + b - 0.01);
+      const A = Math.acos(c3((a * a + D * D - b * b) / (2 * a * D), -1, 1));
+      const K = Math.PI - Math.acos(c3((a * a + b * b - D * D) / (2 * a * b), -1, 1));
+      return [Math.atan2(-vx, -vy) * 180 / Math.PI - A * 180 / Math.PI, K * 180 / Math.PI];
+    };
 
     function buildDeer3D(T) {
       const grad = new T.DataTexture(new Uint8Array([150, 150, 150, 255, 205, 205, 205, 255, 255, 255, 255, 255]), 3, 1, T.RGBAFormat);
@@ -386,7 +407,7 @@
         knee.add(lathe(PROF_LOW, m, 0.85));
         const hoof = new T.Mesh(new T.CylinderGeometry(0.55, 0.85, 1.1, 10), M.hoof); hoof.position.set(0.1, -6.45, 0); knee.add(hoof);
         hip.add(knee); root.add(hip);
-        J[key] = hip; J[key + "k"] = knee;
+        J[key] = hip; J[key + "k"] = knee; J[key + "x"] = x;
       };
       leg("hl2", -9.4, -2.6, M.dark, true); leg("fl2", 10.6, -2.5, M.dark, false);
       leg("hl1", -12.4, 2.6, M.brown, true); leg("fl1", 7.8, 2.5, M.brown, false);
@@ -612,7 +633,7 @@
             st.action = k; st.actionStart = t;
             const a = P3_ACTIONS[k];
             st.actionEnd = t + (dur || (a ? r3(a[1], a[2]) : 6));
-            st.look = null; st.destX = null;
+            st.look = null; st.destX = null; st.sitNext = t + r3(2.5, 4);
             if (k === "walk") {
               let d = r3(D3.RANGE[0], D3.RANGE[1]);
               if (Math.abs(d - st.x) < 30) d = st.x < (D3.RANGE[0] + D3.RANGE[1]) / 2 ? st.x + r3(35, 70) : st.x - r3(35, 70);
@@ -627,6 +648,8 @@
             let r = Math.random() * total, k = keys[0];
             for (const kk of keys) { r -= P3_ACTIONS[kk][3]; if (r <= 0) { k = kk; break; } }
             if (k === st.action) k = k === "idle" ? "graze" : "idle";
+            // Aus dem Liegen oder Sitzen erst aufstehen, dann losgehen
+            if (k === "walk" && (st.action === "rest" || st.action === "sit")) k = "idle";
             setAction(k, t);
           };
           const impulse = (ch, amp, freq, decay) => st.imp[ch].push({ t: now(), amp, freq, decay });
@@ -674,7 +697,7 @@
             if (spot.deer === "nose") { impulse("earL", -18, 26, 4); impulse("earR", -14, 24, 4); }
             if (spot.deer === "back") impulse("tail", -28, 30, 4);
             const sp = spot.scene;
-            if (sp && sp[1] < 60 && !asleep && st.action !== "rest" && Math.random() < 0.5 &&
+            if (sp && sp[1] < 60 && !asleep && st.action !== "rest" && st.action !== "sit" && Math.random() < 0.5 &&
                 sp[0] > D3.RANGE[0] - 25 && sp[0] < D3.RANGE[1] + 25) {
               const side = sp[0] > st.x ? -1 : 1;
               st.curious = { x: c3(sp[0] + side * 24, D3.RANGE[0], D3.RANGE[1]) };
@@ -714,7 +737,7 @@
               if (name === "sleep") { st.forced = "sleep"; return; }
               if (name === "auto") return setAction("idle", t, 1.5);
               if (name.indexOf("walk:") === 0) { setAction("walk", t, 20); st.destX = c3(+name.slice(5), D3.RANGE[0], D3.RANGE[1]); return; }
-              setAction(name, t, name === "rest" ? 30 : name === "walk" ? 20 : name === "look" ? 7.5 : 8);
+              setAction(name, t, name === "rest" ? 30 : name === "sit" ? 25 : name === "walk" ? 20 : name === "look" ? 7.5 : 8);
             },
           };
 
@@ -731,7 +754,7 @@
 
             const bfOnDeer = st.bf && st.bf.mode === "sit" && st.bf.spot && st.bf.spot.deer;
             if (!asleep && !reduce && !bfOnDeer && !st.curious && t > st.actionEnd) pickAction(t);
-            if (bfOnDeer && st.action !== "idle") setAction("idle", t, 3);
+            if (bfOnDeer && st.action !== "idle" && st.action !== "sit" && st.action !== "rest") setAction("idle", t, 3);
             if (!asleep && !reduce && Lv.isDayish && !st.bf && t > st.nextBf) {
               if (st.nextBf > 0) startButterfly(t);
               st.nextBf = t + r3(50, 120);
@@ -745,6 +768,13 @@
               let step = P3_LOOK_SEQ[0];
               for (const s of P3_LOOK_SEQ) if (lt >= s[0]) step = s;
               st.look = step[1] === "viewer" ? { viewer: true } : step[1] === "back" ? { back: true } : { rel: [step[2], step[3]] };
+            }
+
+            // Im Sitzen ab und zu zum Betrachter oder in den Himmel schauen
+            if (st.action === "sit" && !asleep && !st.bf && t > st.sitNext) {
+              const r = Math.random();
+              st.look = r < 0.4 ? { viewer: true } : r < 0.6 ? { rel: [r3(30, 60), r3(50, 70)] } : null;
+              st.sitNext = t + (st.look ? r3(2.5, 4.5) : r3(3, 6));
             }
 
             // Gehen: Wenden über die Frontansicht (Gier läuft durch -90°)
@@ -927,7 +957,7 @@
               blink = u < 0.38 ? e(u / 0.38) : 1 - e((u - 0.38) / 0.62);
             }
             // Lidspalt: meist leicht entspannt, beim Grasen etwas schläfriger, beim Beobachten weit
-            const relaxed = st.look ? 0.0 : st.action === "graze" || st.action === "rest" ? 0.22 : 0.1 + 0.05 * Math.sin(t * 0.37);
+            const relaxed = st.look ? 0.0 : st.action === "graze" || st.action === "rest" || st.action === "sit" ? 0.22 : 0.1 + 0.05 * Math.sin(t * 0.37);
             const closed = Math.max(c.eyes, blink, relaxed);
 
             // ── Szene aktualisieren ──
@@ -938,7 +968,7 @@
             J.body.rotation.z = -rad(c.pitch);
             J.breath.scale.y = 1 + breathe * (asleep ? 0.025 : 0.012);
             J.neckYaw.rotation.y = rad(c.neckYaw);
-            J.neck.rotation.z = -rad(c.neck + chew + Math.sin(ph * 2 + 0.6) * 2.5 * w);
+            J.neck.rotation.z = -rad(c.neck - c.pitch + chew + Math.sin(ph * 2 + 0.6) * 2.5 * w);
             J.headYaw.rotation.y = rad(c.headYaw);
             J.head.rotation.z = -rad(c.head + snf + impVal("head", t));
             J.headRoll.rotation.x = rad(c.headRoll);
@@ -956,10 +986,26 @@
             sac.y += (gy - sac.y) * (1 - Math.exp(-dt / 0.045));
             const dil = 1 + 0.12 * Math.sin(t * 0.23) + (Lv.light < 0.8 ? 0.15 : 0);
             (J.irises || []).forEach(([g, side, pupil]) => { g.position.set(side * sac.x, sac.y, 0); pupil.scale.set(1.0 * dil, 1.25 * dil, 0.9); });
+            // Hinsetzen/Aufstehen: Hinterhufe gleiten am Boden von der Steh- in die Sitzstellung,
+            // Winkel per IK aus der aktuellen Hüfthöhe (sonst schweben die Hufe kurz in der Luft)
+            const sitE = c3(-c.pitch / -P3_POSES.sit.pitch, 0, 1);
+            if (sitE > 0.002) {
+              const S = P3_POSES.sit, w = (x) => x * x * (3 - 2 * x), blend = w(c3(sitE * 3, 0, 1)), e = w(sitE);
+              [["hl1", "hH1", "hK1"], ["hl2", "hH2", "hK2"]].forEach(([k, hk, kk]) => {
+                const hs = hoofAt(hipAt(J[k + "x"], 13.4, 0, 0), P3_BASE[hk], P3_BASE[kk]);
+                const hz = hoofAt(hipAt(J[k + "x"], 13.4, S.bodyY, S.pitch), S[hk], S[kk]);
+                const ik = legIK(hipAt(J[k + "x"], 13.4, c.bodyY, c.pitch), [hs[0] + (hz[0] - hs[0]) * e, hs[1] + (hz[1] - hs[1]) * e]);
+                c[hk] += (ik[0] - c[hk]) * blend; c[kk] += (ik[1] - c[kk]) * blend;
+              });
+            }
             const L = [["hl1", c.hH1 + gH1[0] - gH1[1] * 0.35, c.hK1 + gH1[1]], ["hl2", c.hH2 + gH2[0] - gH2[1] * 0.35, c.hK2 + gH2[1]],
                        ["fl1", c.fH1 + gF1[0] - gF1[1] * 0.3, c.fK1 + gF1[1]], ["fl2", c.fH2 + gF2[0] - gF2[1] * 0.3, c.fK2 + gF2[1]]];
+            // Hüften hängen am Körper: folgen Höhe und Neigung (Drehung um den Körper-Ursprung)
+            const pa = -rad(c.pitch), pc = Math.cos(pa), ps = Math.sin(pa), by = 18 - c.bodyY - bob;
             for (const [k, h, kn] of L) {
-              J[k].position.y = (k[0] === "h" ? 13.4 : 13) - c.bodyY - bob;
+              const lx = J[k + "x"] + 2, ly = (k[0] === "h" ? 13.4 : 13) - 18;
+              J[k].position.x = -2 + lx * pc - ly * ps;
+              J[k].position.y = by + lx * ps + ly * pc;
               J[k].rotation.z = -rad(h);
               J[k + "k"].rotation.z = -rad(kn);
             }
@@ -1041,7 +1087,7 @@
           <span style={{ fontSize: 11, color: C.textFaint, width: "100%", textAlign: "center", letterSpacing: 1 }}>REH-VORSCHAU (3D)</span>
           {[["Automatisch", "auto"], ["Stehen", "idle"], ["Spazieren", "walk"], ["Grasen", "graze"], ["Umschauen", "look"],
             ["Zu dir schauen", "viewer"], ["Nach hinten", "back"], ["Schnuppern", "sniff"],
-            ["Liegen", "rest"], ["Schlafen", "sleep"], ["Schmetterling", "butterfly"]].map(([l, n]) => btn(l, n))}
+            ["Sitzen", "sit"], ["Liegen", "rest"], ["Schlafen", "sleep"], ["Schmetterling", "butterfly"]].map(([l, n]) => btn(l, n))}
         </div>
       );
     }
