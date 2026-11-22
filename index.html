@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.1.1
-  Last updated: 2026-04-16
+  Version: 1.2.0
+  Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
 <html lang="de">
@@ -50,9 +50,9 @@
   <div id="root"></div>
 
   <!-- React + Babel von CDN -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone@7.29.15/babel.min.js"></script>
 
   <script type="text/babel">
     const { useState, useCallback, useEffect, useRef } = React;
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.1.1";
+    const FRONTEND_VERSION = "1.2.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -1252,18 +1252,7 @@
             localStorage.setItem("weckrain_device_id", deviceId);
           }
 
-          // ── Fingerprint ──
           const ua = navigator.userAgent || "";
-          const fpRaw = [ua, screen.width, screen.height,
-            window.devicePixelRatio || 1,
-            Intl.DateTimeFormat().resolvedOptions().timeZone,
-            navigator.language,
-            navigator.hardwareConcurrency || 0].join("|");
-          let fpHash = 0;
-          for (let i = 0; i < fpRaw.length; i++) {
-            fpHash = Math.imul(31, fpHash) + fpRaw.charCodeAt(i) | 0;
-          }
-          const fingerprint = Math.abs(fpHash).toString(16).padStart(8, "0");
 
           // ── Geräteklasse ──
           const isTablet = /iPad|Android(?!.*Mobile)/i.test(ua);
@@ -1289,14 +1278,45 @@
           else if (/Firefox\/(\d+)/.test(ua)) { browser = "Firefox";      browserVersion = RegExp.$1; }
           else if (/Version\/(\d+).*Safari/.test(ua)) { browser = "Safari"; browserVersion = RegExp.$1; }
 
+          // ── Fingerprint (v2, stabil) ──
+          // Nur Merkmale, die sich bei Browser- oder OS-Updates nicht ändern:
+          // keine Versionsnummern, Bildschirm unabhängig von der Drehung.
+          const sw = Math.min(screen.width, screen.height), sh = Math.max(screen.width, screen.height);
+          const fpRaw = ["v2", os, deviceType, browser.replace(/ \(iOS\)$/, ""), sw, sh,
+            window.devicePixelRatio || 1,
+            Intl.DateTimeFormat().resolvedOptions().timeZone,
+            navigator.language,
+            navigator.hardwareConcurrency || 0,
+            navigator.maxTouchPoints || 0].join("|");
+          let fpHash = 0;
+          for (let i = 0; i < fpRaw.length; i++) {
+            fpHash = Math.imul(31, fpHash) + fpRaw.charCodeAt(i) | 0;
+          }
+          const fingerprint = Math.abs(fpHash).toString(16).padStart(8, "0");
+
           const mode = localStorage.getItem("wetter_mode") || "normal";
           const storedPw = localStorage.getItem("wetter_pw") || "";
 
           // ── Geo-IP + Log-Call (fire-and-forget) ──
-          fetch("https://ipapi.co/json/")
-            .then(r => r.ok ? r.json() : {})
-            .catch(() => ({}))
-            .then(geo => {
+          // Zwei Dienste nacheinander: ipapi.co wird oft von Werbeblockern
+          // gesperrt oder ist überlastet, dann springt geojs.io ein.
+          const getJson = (url) => {
+            const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+            const t = ctrl ? setTimeout(() => ctrl.abort(), 4000) : null;
+            return fetch(url, ctrl ? { signal: ctrl.signal } : undefined)
+              .then(r => r.ok ? r.json() : null)
+              .catch(() => null)
+              .finally(() => { if (t) clearTimeout(t); });
+          };
+          const lookupGeo = () =>
+            getJson("https://ipapi.co/json/").then(g => {
+              if (g && g.city) return { city: g.city, region: g.region || "", country: g.country_name || "", isp: g.org || "", src: "ipapi" };
+              return getJson("https://get.geojs.io/v1/ip/geo.json").then(j => j && j.city
+                ? { city: j.city, region: j.region || "", country: j.country || "", isp: j.organization_name || "", src: "geojs" }
+                : { city: "", region: "", country: "", isp: "", src: "keine" });
+            });
+
+          lookupGeo().then(geo => {
               const p = new URLSearchParams({
                 action: "log", pw: storedPw,
                 device_id: deviceId, fingerprint,
@@ -1304,8 +1324,8 @@
                 browser, browser_version: browserVersion,
                 screen_w: screen.width, screen_h: screen.height,
                 dpr: window.devicePixelRatio || 1,
-                city: geo.city || "", region: geo.region || "",
-                country: geo.country_name || "", isp: geo.org || "",
+                city: geo.city, region: geo.region,
+                country: geo.country, isp: geo.isp, geo_src: geo.src,
                 mode, app_version: FRONTEND_VERSION,
                 ua_raw: ua.substring(0, 300)
               });
