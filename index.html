@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.20.0
+  Version: 1.21.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.20.0";
+    const FRONTEND_VERSION = "1.21.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -581,8 +581,26 @@
       J.setBfPalette(0);
       bf.scale.setScalar(2.0);
       bf.visible = false;
-      J.bf = bf; J.bfWings = wings;
+      J.bf = bf; J.bfWings = wings; J.M = M;
       return J;
+    }
+
+    // Kantenlicht (Rim Light) für die Hauptfiguren: schmale, weiche Aufhellung an den Silhouettenkanten auf der
+    // Lichtseite. Löst die Figur ohne Konturlinie vom Hintergrund (Standardmittel im Animationsfilm).
+    // R: gemeinsame Uniforms { rimColor, rimStrength, rimDir (Blickraum) }.
+    function addRim(mat, R) {
+      mat.onBeforeCompile = (sh) => {
+        Object.assign(sh.uniforms, R);
+        sh.fragmentShader = "uniform vec3 rimColor; uniform float rimStrength; uniform vec3 rimDir;\n" + sh.fragmentShader.replace(
+          "#include <output_fragment>",
+          `float rimF = 1.0 - clamp(dot(normal, vec3(0.0, 0.0, 1.0)), 0.0, 1.0);
+           float rimBand = smoothstep(0.52, 0.78, rimF);
+           float rimSide = smoothstep(-0.25, 0.55, dot(normal, normalize(rimDir)));
+           outgoingLight += rimColor * rimStrength * rimBand * rimSide;
+           #include <output_fragment>`);
+      };
+      mat.customProgramCacheKey = () => "rim";
+      mat.needsUpdate = true;
     }
 
     // ─── 3D-SZENE (Vorschau ?szene=3d) ───────────────────────────────────
@@ -599,14 +617,14 @@
       } catch (e) { return false; }
     }
 
-    // Hausvariante der 3D-Vorschau: ?haus=a|b|c|d (Standard b)
+    // Hausvariante der 3D-Vorschau: ?haus=a|b|c|d (Standard a, von Karsten gewählt)
     function houseVariant() {
       try {
         const q = new URLSearchParams(window.location.search).get("haus");
         if (["a", "b", "c", "d"].includes(q)) localStorage.setItem("wetter_haus", q);
         const v = localStorage.getItem("wetter_haus");
-        return ["a", "b", "c", "d"].includes(v) ? v : "b";
-      } catch (e) { return "b"; }
+        return ["a", "b", "c", "d"].includes(v) ? v : "a";
+      } catch (e) { return "a"; }
     }
 
     // Jahreszeit der 3D-Szene: nach Datum, zum Testen ?jahreszeit=fruehling|sommer|herbst|spaetherbst|winter (auto = Datum).
@@ -674,7 +692,7 @@
       gs.moveTo(-60, -110);
       for (let x = -60; x <= 580; x += 10) gs.lineTo(x, (GR - topY(x)) / TS);
       gs.lineTo(580, -110); gs.lineTo(-60, -110);
-      const groundM = toon(0x4f7a45);
+      const groundM = toon(0x47714a);     // etwas dunkler und kühler: Reh (warm) hebt sich ab
       const ground = add(mesh(new T.ShapeGeometry(gs, 24), groundM, false, true)); ground.rotation.x = -Math.PI / 2;
       // Wegsteine: führen in sanftem Bogen von vorn zur Tür
       const stoneM = toon(0x9a9a92);
@@ -715,7 +733,7 @@
         slab.position.set(mx + nx * RT / 2, my + ny * RT / 2, ZH - DEP / 2 + 0);
         slab.rotation.z = sd < 0 ? slopeA : -slopeA; add(slab);
       });
-      { const r = add(mesh(BOX, roofM, true, true)); r.scale.set(10, 4, DEP + 2 * OV + 1); r.position.set(260, yA + RT / Math.cos(slopeA) + 0.5, ZH - DEP / 2); }
+      { const r = add(mesh(BOX, roofM, true, true)); r.scale.set(9, 3, DEP + 2 * OV - 2); r.position.set(260, yA + RT / Math.cos(slopeA) - 1.2, ZH - DEP / 2); }   // First, bündig
       // Weiße Balkenköpfe unter dem Dachüberstand
       [112, 150, 196, 236, 284, 324, 370, 408].forEach((x) => {
         const b = add(mesh(BOX, whiteM, true, true)); b.scale.set(6, 7, OV + 2); b.position.set(x, roofBottom(x) - 3.4, ZH + OV / 2 - 1);
@@ -727,6 +745,33 @@
       { const c = add(mesh(BOX, chimCapM, true, true)); c.scale.set(12, 5, 12); c.position.set(chimX, chimTop + 5, chimZ); }
       spots.push([chimX, chimTop + 9, chimZ]);
       const smokeY = chimTop + 8;
+      // ── Vogel (Datenträger „Gesang“, nur Karsten-Modus): Toon-Figur im Stil des Rehs, sitzt auf dem First ──
+      const bird = new T.Group(); add(bird);
+      { const lil = toon(0xc49bdb), lilDark = toon(0xa77fc2), belly = toon(0xeadcf2), beakM = toon(0xf0a05a);
+        const P = new T.Group(); P.rotation.y = -0.55; bird.add(P); bird.userData.P = P;   // leicht zum Betrachter gedreht
+        ball(lil, 0, 5.2, 0, 5.6, 4.7, 4.5, P);                                   // Körper
+        ball(belly, 1.6, 4.2, 1.4, 3.8, 3.2, 3.4, P);                             // Bauch
+        [-1, 1].forEach((sd) => { const w = ball(lilDark, -0.6, 6, sd * 3.7, 4.4, 2.7, 1.3, P); w.rotation.z = 0.25; });   // Flügel
+        const tail = new T.Group(); tail.position.set(-4.8, 6.2, 0); P.add(tail); bird.userData.tail = tail;
+        [-0.8, 0.8].forEach((dz) => { const f = ball(lilDark, -3, 1.6, dz, 3.6, 1.1, 1.2, tail); f.rotation.z = 0.45; });
+        const head = new T.Group(); head.position.set(3.6, 9.2, 0); P.add(head); bird.userData.head = head;
+        ball(lil, 0, 0.6, 0, 3.6, 3.4, 3.4, head);
+        [-1, 1].forEach((sd) => {
+          ball(new T.MeshBasicMaterial({ color: 0x1e1428 }), 2.1, 1.2, sd * 2.5, 0.85, 1.05, 0.6, head);
+          ball(new T.MeshBasicMaterial({ color: 0xffffff }), 2.55, 1.6, sd * 2.75, 0.3, 0.3, 0.2, head);
+        });
+        const up = mesh(new T.ConeGeometry(0.95, 3, 10), beakM, true, false); up.rotation.z = -Math.PI / 2; up.position.set(4.6, 0.9, 0); head.add(up);
+        const jaw = new T.Group(); jaw.position.set(3.2, 0.5, 0); head.add(jaw); bird.userData.jaw = jaw;
+        const lo = mesh(new T.ConeGeometry(0.7, 2.4, 10), beakM, true, false); lo.rotation.z = -Math.PI / 2; lo.position.set(1.2, -0.2, 0); jaw.add(lo);
+        [-1.2, 1.2].forEach((dz) => { const l = mesh(BOX, beakM); l.scale.set(0.6, 1.6, 0.6); l.position.set(0.6, 0.6, dz); P.add(l); });
+      }
+      bird.scale.setScalar(1.2); bird.visible = false;
+      // Noten: kleine Sprites, steigen beim Singen vom Schnabel auf
+      const noteTex = (ch) => { const c = document.createElement("canvas"); c.width = c.height = 64; const g = c.getContext("2d");
+        g.fillStyle = "#dcc3ec"; g.font = "bold 50px Georgia, serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(ch, 32, 34); return new T.CanvasTexture(c); };
+      const notes = ["\u266A", "\u266B", "\u266A"].map((ch) => { const sp = new T.Sprite(new T.SpriteMaterial({ map: noteTex(ch), transparent: true, opacity: 0, depthWrite: false })); sp.scale.setScalar(10); add(sp); return { sp, age: 9 }; });
+      let noteAcc = 0;
+
       // Holzbalkon unter dem Giebel mit zwei schweren Pfosten und Lichtleiste
       let ledStrip = null, ledGlow = null;
       if (balcony) {
@@ -747,16 +792,18 @@
       }
       function roofBottomSvg(x) { return 148 - (125 - Math.abs(x - 260)) * 64 / 125; }
       // Fenster: Rahmen steht vor, Scheiben liegen zurück, Fensterbank mit Tiefe
+      // Fenster (90 % der ursprünglichen Größe): Rahmen steht vor, Scheiben liegen zurück, Fensterbank mit Tiefe
       const win = (x0, key) => {
-        rect(x0, 165, 60, 48, basic("winBg"), ZH + 0.2);
-        const panes = [[x0 + 3, 168, 25, 19, 0.85], [x0 + 32, 168, 25, 19, 0.75], [x0 + 3, 191, 25, 19, 0.7], [x0 + 32, 191, 25, 19, 0.8]];
-        const mats = panes.map(([x, y, w, h, op]) => { const m = basic(key + "Pane", { transparent: true, opacity: 1 }); m.userData.onOp = op; rect(x, y, w, h, m, ZH + 0.4); return m; });
-        [[x0 - 3, 162, 66, 4], [x0 - 3, 210, 66, 4], [x0 - 3, 162, 4, 52], [x0 + 59, 162, 4, 52]].forEach(([x, y, w, h]) => box(x, y, w, h, 3, frameM, ZH + 3));
-        [[x0 + 28.5, 165, 3, 46], [x0, 187.5, 60, 3]].forEach(([x, y, w, h]) => box(x, y, w, h, 1.6, frameM, ZH + 1.8));
-        box(x0 - 7, 213, 74, 5, 9, sillM, ZH + 9);
-        spots.push([x0 + 12, yAt(213, ZH + 5) + 0.6, ZH + 5], [x0 + 48, yAt(213, ZH + 5) + 0.6, ZH + 5]);
+        const cx = x0 + 30, w = 54, h = 43, x = cx - w / 2, y = 189 - h / 2, pw = (w - 9) / 2, ph = (h - 9) / 2;
+        rect(x, y, w, h, basic("winBg"), ZH + 0.2);
+        const panes = [[x + 3, y + 3, 0.85], [x + 6 + pw, y + 3, 0.75], [x + 3, y + 6 + ph, 0.7], [x + 6 + pw, y + 6 + ph, 0.8]];
+        const mats = panes.map(([px, py, op]) => { const m = basic(key + "Pane", { transparent: true, opacity: 1 }); m.userData.onOp = op; rect(px, py, pw, ph, m, ZH + 0.4); return m; });
+        [[x - 3, y - 3, w + 6, 4], [x - 3, y + h - 1, w + 6, 4], [x - 3, y - 3, 4, h + 4], [x + w - 1, y - 3, 4, h + 4]].forEach(([bx, by, bw, bh]) => box(bx, by, bw, bh, 3, frameM, ZH + 3));
+        [[cx - 1.5, y, 3, h], [x, y + h / 2 - 1.5, w, 3]].forEach(([bx, by, bw, bh]) => box(bx, by, bw, bh, 1.6, frameM, ZH + 1.8));
+        box(x - 7, y + h, w + 14, 5, 9, sillM, ZH + 9);
+        spots.push([x + 10, yAt(y + h, ZH + 5) + 0.6, ZH + 5], [x + w - 10, yAt(y + h, ZH + 5) + 0.6, ZH + 5]);
         const glow = add(mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending })));
-        glow.scale.set(78, 64, 1); glow.position.set(x0 + 30, yAt(189, ZH + 4), ZH + 4);
+        glow.scale.set(70, 58, 1); glow.position.set(cx, yAt(189, ZH + 4), ZH + 4);
         return { mats, glow };
       };
       const W = { k: win(160, "k"), s: win(300, "s") };
@@ -1048,6 +1095,29 @@
         doorLight.material.opacity = S.eOn ? 0.3 : 0;
         knob.position.x += ((S.eOn ? 250 : 270) - knob.position.x) * (knob.userData.init ? k * 1.5 : 1); knob.userData.init = true;
         knob.position.y = yAt(250, dz + 1.2);
+        // Vogel: auf dem First, singt in Phrasen, schaut sich um, wippt mit dem Schwanz
+        const showB = !!S.birdOn;
+        if (showB && !bird.visible) { bird.visible = true; bird.userData.pop = 0; }
+        if (!showB) bird.visible = false;
+        if (bird.visible) {
+          const ridgeTop = yA + RT / Math.cos(slopeA) + 0.2, bz = ZH - DEP * 0.12;
+          bird.userData.pop = Math.min(1, (bird.userData.pop || 0) + dt * 3);
+          const pe = bird.userData.pop, pop = pe < 1 ? 1 + Math.sin(pe * Math.PI) * 0.15 : 1;
+          bird.position.set(256, ridgeTop, bz); bird.scale.setScalar(1.75 * pop * Math.min(1, pe * 1.5));
+          const phase = t % 6.5, singing = phase < 3.6;
+          bird.userData.jaw.rotation.z = singing ? -0.38 * Math.abs(Math.sin(t * 11)) : 0;
+          bird.userData.head.rotation.z = singing ? 0.18 + 0.06 * Math.sin(t * 5.5) : 0.02;
+          bird.userData.head.rotation.y = singing ? 0 : 0.5 * Math.sin(Math.floor(t / 2.2) * 2.7);
+          bird.userData.P.position.y = 0.35 * Math.max(0, Math.sin(t * 2.6));
+          bird.userData.tail.rotation.z = 0.25 * Math.exp(-((t * 0.9) % 3.5) * 4) * Math.sin(t * 30);
+          noteAcc += dt * (singing ? 1.1 : 0);
+          if (noteAcc > 1) { noteAcc = 0; const n = notes.find((q) => q.age > 2.4); if (n) { n.age = 0; n.x0 = 256 + 10; n.y0 = ridgeTop + 22; n.z0 = bz + 6; n.w = Math.random() * 6; } }
+          notes.forEach((n) => {
+            n.age += dt; const u = n.age / 2.4;
+            n.sp.material.opacity = u < 1 ? Math.min(1, u * 5) * (1 - u) * 0.9 : 0;
+            if (u < 1) n.sp.position.set(n.x0 + u * 9 + Math.sin(u * 5 + n.w) * 2, n.y0 + u * 16, n.z0);
+          });
+        } else notes.forEach((n) => { n.sp.material.opacity = 0; });
         if (S.season !== seasonNow) { seasonNow = S.season; applySeason(S.season); }
         tickLeaves(S.season, t, dt);
         tickSmoke(S, t, dt);
@@ -1058,7 +1128,7 @@
           starGlow.material.opacity = (0.35 + 0.1 * Math.sin(t * 1.7)) * (S.isDay ? 0.4 : 1);
         }
       };
-      return { update, spots, ownsLights: true };
+      return { update, spots, ownsLights: true, sun };
     }
 
     let _glowTex = null;
@@ -1088,7 +1158,7 @@
           renderer.setClearColor(0x000000, 0);
           const G = D3.REGION;
           const scene = new T.Scene();
-          const cam = new T.OrthographicCamera(G.x0, G.x1, D3.GROUND - G.y0, D3.GROUND - G.y1, -2000, 2000);
+          let cam = new T.OrthographicCamera(G.x0, G.x1, D3.GROUND - G.y0, D3.GROUND - G.y1, -2000, 2000);
           cam.position.set(0, Math.sin(D3.TILT) * 500, Math.cos(D3.TILT) * 500);
           cam.lookAt(0, 0, 0);
           // Frustum-Mitte bleibt bei x=0, deshalb Kamera seitlich nicht verschieben
@@ -1099,10 +1169,26 @@
           scene.add(J.root, J.bf);
           const S3 = live.current.scene ? buildScene3D(T, scene, renderer) : null;
           if (S3) {
+            // Leichte echte Zentralperspektive: Dach verjüngt sich nach hinten, Vordergrund (Reh) wirkt ~10 % größer.
+            // Die Hausfront (z = ZH) bleibt pixelgenau an ihrer SVG-Position; Bildmitte der Perspektive auf Höhe des Rehs.
+            const TS = Math.sin(D3.TILT), TC = Math.cos(D3.TILT), ZH = (278 - D3.GROUND) / TS;
+            const D = 1870, A = new T.Vector3(260, (D3.GROUND - 290 + ZH * TS) / TC, ZH);
+            const pc = new T.PerspectiveCamera();
+            pc.position.copy(A).add(new T.Vector3(0, TS, TC).multiplyScalar(D)); pc.lookAt(A);
+            pc.near = 60; pc.far = 6000; pc.updateMatrixWorld(true);
+            const n = pc.near;
+            pc.projectionMatrix.makePerspective(-260 * n / D, 260 * n / D, 290 * n / D, -30 * n / D, n, pc.far);
+            pc.projectionMatrixInverse.copy(pc.projectionMatrix).invert();
+            cam = pc;
             // Szene bringt eigenes Licht und Schatten mit: Reh wirft echten Schatten, Klecks-Schatten nur noch zart
             J.root.traverse((c) => { if (c.isMesh && c !== J.shadow) c.castShadow = true; });
             J.shadow.material.opacity = 0.12;
           }
+          // Reh hervorheben: Kantenlicht und etwas mehr Sättigung (dezent)
+          const RIM = { rimColor: { value: new T.Color(0xffffff) }, rimStrength: { value: 0.2 }, rimDir: { value: new T.Vector3(0, 1, 0) } };
+          ["brown", "dark", "cream", "muzzle", "muzzleLight", "earIn", "spot", "white"].forEach((k) => { if (J.M[k]) addRim(J.M[k], RIM); });
+          ["brown", "dark", "muzzle"].forEach((k) => J.M[k] && J.M[k].color.offsetHSL(0, 0.06, 0.01));
+          const rimTmp = new T.Vector3();
           // Schatten des Schmetterlings am Boden: Tiefen- und Höhenhinweis
           const bfShadow = new T.Mesh(new T.CircleGeometry(1, 20), new T.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthWrite: false }));
           bfShadow.rotation.x = -Math.PI / 2; bfShadow.position.y = 0.45; scene.add(bfShadow);
@@ -1591,6 +1677,11 @@
             } else { J.bf.visible = false; bfShadow.visible = false; }
 
             if (S3) S3.update(Lv.scene, t, dt);
+            // Kantenlicht folgt der Hauptlichtquelle (Richtung im Blickraum, Farbe des Lichts)
+            const keyL = S3 ? S3.sun : dir;
+            rimTmp.copy(keyL.position).sub(keyL.target ? keyL.target.position : rimTmp.set(0, 0, 0)).normalize().transformDirection(cam.matrixWorldInverse);
+            RIM.rimDir.value.copy(rimTmp); RIM.rimColor.value.copy(keyL.color);
+            RIM.rimStrength.value = S3 ? (Lv.scene && Lv.scene.slotName === "Nachts" ? 0.16 : 0.2) : 0.14;
             // Licht nach Tageszeit
             if (S3) { amb.intensity = 0; dir.intensity = 0; } else { amb.intensity = 0.62 * Lv.light; dir.intensity = 0.55 * Lv.light; }
 
@@ -1599,7 +1690,8 @@
               J.nose.getWorldPosition(tmp);
               const op = c3((c.eyes - 0.6) / 0.4, 0, 1);
               zzzRef.current.setAttribute("opacity", op.toFixed(3));
-              zzzRef.current.setAttribute("transform", `translate(${(tmp.x - 60 - 4).toFixed(1)}, ${(D3.GROUND - tmp.y * Math.cos(D3.TILT) - 10).toFixed(1)})`);
+              const pz = tmp.clone().project(cam);       // funktioniert für beide Kameras
+              zzzRef.current.setAttribute("transform", `translate(${((pz.x + 1) / 2 * 520 - 60 - 4).toFixed(1)}, ${((1 - pz.y) / 2 * 320 - 10).toFixed(1)})`);
             }
             renderer.render(scene, cam);
           };
@@ -1960,6 +2052,7 @@
       const cold = slot.w && typeof slot.w.t === "number" ? slot.w.t < 10 : ["herbst", "spaetherbst", "winter"].includes(season);
       const sceneState = s3 ? {
         isDay, kOn, sOn, eOn, winter: !!winter, season: season || "sommer", xmas: !!xmas, slotName, sunAngle: sky.sunAngle,
+        birdOn: !!(showBird && gOn),
         // Kaminrauch: wenn in der Küche etwas los ist, sonst morgens/abends/nachts bei Kälte
         smoke: kOn ? 1 : cold && ["Morgens", "Abends", "Nachts"].includes(slotName) ? 0.7 : 0,
         colors: {
@@ -2342,7 +2435,7 @@
         {s3 && <svg viewBox="0 0 520 320" fill="none" aria-hidden="true" style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
           <g clipPath="url(#sceneClip)">
             <g transform="translate(60, 0)">
-              <g transform="translate(0, 14)">{birdEl}</g>
+              {showBird && gErr && !gOn && <g transform="translate(200, 70)"><circle cx="0" cy="0" r="6" fill="rgba(20,20,30,0.8)" /><text x="0" y="4" textAnchor="middle" fontSize="10" fill={isFehler(slot.g)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}
               {kErrBadge}{sErrBadge}{eErrBadge}
               {zzzEl}
             </g>
