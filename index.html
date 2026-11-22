@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.21.0
+  Version: 1.22.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.21.0";
+    const FRONTEND_VERSION = "1.22.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -824,15 +824,34 @@
       // tief und vor dem Haus: Licht fällt auf Rasen, Büsche und Reh, nicht flächig auf die Wand
       const WL = { k: winLight(0xffcf6a, 190, 16, ZH + 48), s: winLight(0x7fb4e6, 330, 16, ZH + 48), e: winLight(0x8fd896, 260, 10, ZH + 40) };
 
+      // Wandlaterne links neben der Tür: abends, nachts und früh morgens an, wirft warmes Licht auf den Rasen
+      // links vor dem Haus (dort, wo sich das Reh aufhält) und liefert nachts das Kantenlicht für das Reh.
+      const lampX = 226, lampSy = 236;
+      { const housing = toon(0x2d2a2a);
+        box(lampX - 1.5, lampSy - 10, 3, 4, 7, housing, ZH + 7);                 // Halter
+        const body = add(mesh(BOX, housing, true, false)); body.scale.set(8, 11, 8); body.position.set(lampX, yAt(lampSy, ZH + 8), ZH + 8);
+        const cap = add(mesh(new T.ConeGeometry(6.5, 4, 4), housing, true, false)); cap.rotation.y = Math.PI / 4; cap.position.set(lampX, yAt(lampSy - 7.5, ZH + 8), ZH + 8);
+      }
+      const lampGlass = add(mesh(BOX, new T.MeshBasicMaterial({ color: 0x6a5a40 }))); lampGlass.scale.set(6, 8.5, 8.4); lampGlass.position.set(lampX, yAt(lampSy, ZH + 8), ZH + 8);
+      const lampGlow = add(mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), color: 0xffc777, transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending })));
+      lampGlow.scale.setScalar(46); lampGlow.position.set(lampX, yAt(lampSy, ZH + 13), ZH + 13);
+      // Lichtkegel schräg nach vorn-links auf den Rasen (Wand liegt hinter der Lampe, bleibt fast dunkel),
+      // dazu ein kleiner Schein direkt an der Wand um die Lampe
+      const lampLight = new T.SpotLight(0xffc27a, 0, 420, 0.85, 0.85, 1.1);
+      lampLight.position.set(lampX, yAt(lampSy, ZH + 12), ZH + 12); lampLight.target.position.set(150, 0, -20); scene.add(lampLight, lampLight.target);
+      const lampHalo = new T.PointLight(0xffc27a, 0, 34, 2); lampHalo.position.set(lampX, yAt(lampSy, ZH + 9), ZH + 9); scene.add(lampHalo);
+      let lampOn = 0;
+
       // ── Garten: Lattenzaun, Büsche, Briefkasten, Blumen, Grasbüschel ──
       const woodM = toon(0xc4a07a);
+      const fenceM = toon(0xdcd9cf);      // verwittertes Weiß: Fell (warmbraun) hebt sich klar ab
       const fence = (x0, x1, z) => {
         for (let x = x0; x <= x1; x += 9) {
-          const p = add(mesh(BOX, woodM, true, true)); p.scale.set(5, 22, 2.2); p.position.set(x, 11, z);
-          const tip = add(mesh(new T.CylinderGeometry(0, 3.5, 4, 4), woodM, true, true)); tip.rotation.y = Math.PI / 4; tip.scale.set(1, 1, 0.45); tip.position.set(x, 24, z);
+          const p = add(mesh(BOX, fenceM, true, true)); p.scale.set(5, 22, 2.2); p.position.set(x, 11, z);
+          const tip = add(mesh(new T.CylinderGeometry(0, 3.5, 4, 4), fenceM, true, true)); tip.rotation.y = Math.PI / 4; tip.scale.set(1, 1, 0.45); tip.position.set(x, 24, z);
           if ((x - x0) % 27 === 0) spots.push([x, 27, z]);
         }
-        [7, 16].forEach((y) => { const r = add(mesh(BOX, woodM, true, true)); r.scale.set(x1 - x0 + 6, 2.6, 1.6); r.position.set((x0 + x1) / 2, y, z - 1.8); });
+        [7, 16].forEach((y) => { const r = add(mesh(BOX, fenceM, true, true)); r.scale.set(x1 - x0 + 6, 2.6, 1.6); r.position.set((x0 + x1) / 2, y, z - 1.8); });
       };
       fence(62, 125, -128); fence(396, 432, -128);
       const bushM = toon(0x3d6640), bushDark = toon(0x325836);
@@ -1087,6 +1106,12 @@
           WL[key].intensity += ((on && !S.isDay ? (key === "k" ? 0.75 : 0.55) * (0.85 + 0.15 * pulse) : 0) - WL[key].intensity) * k;
         });
         WL.e.intensity += ((S.eOn && !S.isDay ? 0.45 : 0) - WL.e.intensity) * k;
+        const dark = S.slotName === "Abends" || S.slotName === "Nachts" || S.slotName === "Morgens";
+        lampOn += ((dark ? 1 : 0) - lampOn) * k;
+        lampLight.intensity = lampOn * (S.slotName === "Nachts" ? 1.6 : 1.1) * (0.97 + 0.03 * Math.sin(t * 7.3) * Math.sin(t * 2.1));
+        lampHalo.intensity = lampOn * 0.8;
+        lampGlow.material.opacity = lampOn * 0.75;
+        lampGlass.material.color.setHex(0x6a5a40).lerp(col.setHex(0xffe2a8), lampOn);
         if (ledStrip) {   // Lichtleiste unter dem Balkon: abends und nachts warm, dezent
           const on = S.slotName === "Abends" || S.slotName === "Nachts" || S.slotName === "Morgens";
           ledStrip.material.opacity += ((on ? 0.95 : 0) - ledStrip.material.opacity) * k;
@@ -1128,7 +1153,7 @@
           starGlow.material.opacity = (0.35 + 0.1 * Math.sin(t * 1.7)) * (S.isDay ? 0.4 : 1);
         }
       };
-      return { update, spots, ownsLights: true, sun };
+      return { update, spots, ownsLights: true, sun, lamp: { light: lampLight, on: () => lampOn } };
     }
 
     let _glowTex = null;
@@ -1182,12 +1207,12 @@
             cam = pc;
             // Szene bringt eigenes Licht und Schatten mit: Reh wirft echten Schatten, Klecks-Schatten nur noch zart
             J.root.traverse((c) => { if (c.isMesh && c !== J.shadow) c.castShadow = true; });
-            J.shadow.material.opacity = 0.12;
+            J.shadow.material.opacity = 0.2;
           }
           // Reh hervorheben: Kantenlicht und etwas mehr Sättigung (dezent)
           const RIM = { rimColor: { value: new T.Color(0xffffff) }, rimStrength: { value: 0.2 }, rimDir: { value: new T.Vector3(0, 1, 0) } };
           ["brown", "dark", "cream", "muzzle", "muzzleLight", "earIn", "spot", "white"].forEach((k) => { if (J.M[k]) addRim(J.M[k], RIM); });
-          ["brown", "dark", "muzzle"].forEach((k) => J.M[k] && J.M[k].color.offsetHSL(0, 0.06, 0.01));
+          ["brown", "dark", "muzzle"].forEach((k) => J.M[k] && J.M[k].color.offsetHSL(0, S3 ? 0.12 : 0.06, S3 ? 0.02 : 0.01));
           const rimTmp = new T.Vector3();
           // Schatten des Schmetterlings am Boden: Tiefen- und Höhenhinweis
           const bfShadow = new T.Mesh(new T.CircleGeometry(1, 20), new T.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthWrite: false }));
@@ -1567,7 +1592,7 @@
             // ── Szene aktualisieren ──
             J.root.position.set(st.x, 0, 0);
             J.root.rotation.y = rad(st.yaw);
-            J.root.scale.setScalar(D3.SCALE);
+            J.root.scale.setScalar(S3 ? D3.SCALE * 1.16 : D3.SCALE);
             J.body.position.y = 18 - c.bodyY - bob;
             J.body.rotation.z = -rad(c.pitch);
             // Abschütteln: kräftiges, schnell abklingendes Rollen um die Körperachse
@@ -1644,7 +1669,7 @@
               J[k].rotation.z = -rad(h);
               J[k + "k"].rotation.z = -rad(kn);
             }
-            J.shadow.material.opacity = (S3 ? 0.12 : 0.26) - c3(c.bodyY / 10, 0, 1) * 0.06;
+            J.shadow.material.opacity = (S3 ? 0.2 : 0.26) - c3(c.bodyY / 10, 0, 1) * 0.06;
 
             if (st.bf) {
               J.bf.visible = true;
@@ -1678,10 +1703,21 @@
 
             if (S3) S3.update(Lv.scene, t, dt);
             // Kantenlicht folgt der Hauptlichtquelle (Richtung im Blickraum, Farbe des Lichts)
-            const keyL = S3 ? S3.sun : dir;
-            rimTmp.copy(keyL.position).sub(keyL.target ? keyL.target.position : rimTmp.set(0, 0, 0)).normalize().transformDirection(cam.matrixWorldInverse);
-            RIM.rimDir.value.copy(rimTmp); RIM.rimColor.value.copy(keyL.color);
-            RIM.rimStrength.value = S3 ? (Lv.scene && Lv.scene.slotName === "Nachts" ? 0.16 : 0.2) : 0.14;
+            // Im Dunkeln kommt das Kantenlicht von der Laterne (warm, seitlich), sonst von Sonne bzw. Mond
+            const lampK = S3 ? S3.lamp.on() : 0;
+            if (lampK > 0.5) {
+              J.root.getWorldPosition(rimTmp); rimTmp.y += 18;
+              rimTmp.subVectors(S3.lamp.light.position, rimTmp).normalize().transformDirection(cam.matrixWorldInverse);
+              RIM.rimColor.value.setHex(0xffc27a);
+              RIM.rimStrength.value = 0.42;
+            } else {
+              const keyL = S3 ? S3.sun : dir;
+              rimTmp.copy(keyL.position).sub(keyL.target ? keyL.target.position : rimTmp.set(0, 0, 0)).normalize();
+              RIM.rimColor.value.copy(keyL.color);
+              RIM.rimStrength.value = S3 ? 0.3 : 0.14;
+              rimTmp.transformDirection(cam.matrixWorldInverse);
+            }
+            RIM.rimDir.value.copy(rimTmp);
             // Licht nach Tageszeit
             if (S3) { amb.intensity = 0; dir.intensity = 0; } else { amb.intensity = 0.62 * Lv.light; dir.intensity = 0.55 * Lv.light; }
 
