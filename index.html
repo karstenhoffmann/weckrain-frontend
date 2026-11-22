@@ -1,0 +1,1397 @@
+<!DOCTYPE html>
+<!--
+  Weckrain Frontend — index.html
+  Version: 1.1.1
+  Last updated: 2026-04-16
+  Source of truth: /VERSIONS.json
+-->
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+
+  <!-- ── App-Icon & PWA ─────────────────────────────────────────────── -->
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#080e1a">
+  <!-- iOS: Vollbild-App-Modus wenn zum Home-Bildschirm hinzugefügt -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Mama Wetter">
+
+  <!-- ── Open Graph (WhatsApp / iMessage / Slack etc.) ─────────────── -->
+  <meta property="og:type"        content="website">
+  <meta property="og:title"       content="Mama Wetter">
+  <meta property="og:description" content="Wetterstation Weckrain">
+  <meta property="og:image"       content="https://weckrain.derkarsten.de/og-image.jpg">
+  <meta property="og:url"         content="https://weckrain.derkarsten.de">
+  <meta property="og:site_name"   content="Mama Wetter">
+  <!-- Twitter/X summary card (wird auch von manchen Messengern ausgewertet) -->
+  <meta name="twitter:card"  content="summary_large_image">
+  <meta name="twitter:image" content="https://weckrain.derkarsten.de/og-image.jpg">
+  <meta name="twitter:title" content="Mama Wetter">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html { font-size: 16px; }
+    body { background: #080e1a; overflow-x: hidden; -webkit-font-smoothing: antialiased; }
+    #root { min-height: 100vh; min-height: 100dvh; }
+    button { -webkit-appearance: none; border: none; background: none; cursor: pointer; }
+
+    /* Mobile-first responsive scaling */
+    @media (max-width: 520px) {
+      html { font-size: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React + Babel von CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useCallback, useEffect, useRef } = React;
+
+    // ═══ KONFIGURATION ═══════════════════════════════════════════════════
+    // Deine Google Apps Script Web-App URL (aus Deploy → Manage deployments)
+    const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
+
+    // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
+    const FRONTEND_VERSION = "1.1.1";
+    // ═════════════════════════════════════════════════════════════════════
+
+    // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
+    function useIsMobile() {
+      const [mobile, setMobile] = useState(window.innerWidth < 520);
+      useEffect(() => {
+        const onResize = () => setMobile(window.innerWidth < 520);
+        window.addEventListener("resize", onResize);
+        return () => window.removeEventListener("resize", onResize);
+      }, []);
+      return mobile;
+    }
+
+    // Returns "sm" (<520), "md" (520-899), "lg" (900+)
+    function useBreakpoint() {
+      const [bp, setBp] = useState(window.innerWidth < 520 ? "sm" : window.innerWidth < 900 ? "md" : "lg");
+      useEffect(() => {
+        const onResize = () => setBp(window.innerWidth < 520 ? "sm" : window.innerWidth < 900 ? "md" : "lg");
+        window.addEventListener("resize", onResize);
+        return () => window.removeEventListener("resize", onResize);
+      }, []);
+      return bp;
+    }
+
+    // ─── CONFIG ──────────────────────────────────────────────────────────
+    const SLOTS = ["Nachts", "Morgens", "Vormittags", "Mittags", "Nachmittags", "Abends"];
+    const SLOT_LABELS = { Nachts: "00–04", Morgens: "04–08", Vormittags: "08–12", Mittags: "12–14", Nachmittags: "14–18", Abends: "18–24" };
+    const SLOT_SHORT = { Nachts: "Nachts", Morgens: "Morg.", Vormittags: "Vorm.", Mittags: "Mittags", Nachmittags: "Nachm.", Abends: "Abends" };
+    const WDAYS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
+    const ff = "'Inter', system-ui, -apple-system, sans-serif";
+    const ffSerif = "'Georgia', 'Times New Roman', serif";
+
+    // ─── SUN ARC ─────────────────────────────────────────────────────────
+    const SUN_ARC = { cx: 260, cy: 288, r: 252 };
+    function sunPos(angleDeg) {
+      const rad = angleDeg * Math.PI / 180;
+      return {
+        x: SUN_ARC.cx - SUN_ARC.r * Math.cos(rad),
+        y: SUN_ARC.cy - SUN_ARC.r * Math.sin(rad),
+      };
+    }
+
+    // ─── TIME-OF-DAY THEMES ──────────────────────────────────────────────
+    const SKY = {
+      Nachts:      { top: "#050a14", bot: "#0c1525", stars: 0.9, moonOp: 0.15, sunAngle: -15, sunOp: 0, sunColor: "#f5c842", horizonOp: 0, horizonColor: "#1a1020", wallLight: 0 },
+      Morgens:     { top: "#1a1535", bot: "#4a2a45", stars: 0.15, moonOp: 0, sunAngle: 15, sunOp: 0.9, sunColor: "#f5a623", horizonOp: 0.4, horizonColor: "#d46a3a", wallLight: 0.08 },
+      Vormittags:  { top: "#2a4a7a", bot: "#5a8ab8", stars: 0, moonOp: 0, sunAngle: 55, sunOp: 1, sunColor: "#f8d84a", horizonOp: 0.1, horizonColor: "#7aaad4", wallLight: 0.18 },
+      Mittags:     { top: "#3a6aa0", bot: "#7ab4d8", stars: 0, moonOp: 0, sunAngle: 90, sunOp: 1, sunColor: "#fff4b0", horizonOp: 0.05, horizonColor: "#8ac4e0", wallLight: 0.25 },
+      Nachmittags: { top: "#3a5a88", bot: "#6a9ac0", stars: 0, moonOp: 0, sunAngle: 125, sunOp: 1, sunColor: "#f5c040", horizonOp: 0.15, horizonColor: "#c8a060", wallLight: 0.15 },
+      Abends:      { top: "#1a1830", bot: "#3a2035", stars: 0.4, moonOp: 0.06, sunAngle: 165, sunOp: 0.6, sunColor: "#e07030", horizonOp: 0.5, horizonColor: "#b04828", wallLight: 0.04 },
+    };
+
+    // ─── HELPERS ─────────────────────────────────────────────────────────
+    const fmt = (d) => { const p = d.split("-"); return p[2] + "." + p[1] + "."; };
+    const wday = (d) => WDAYS[new Date(d + "T12:00:00").getDay()];
+    const isOn = (v) => v === true;
+    const isError = (v) => v === "offline" || v === "fehler";
+    const isFehler = (v) => v === "fehler";
+    const isNoData = (v) => v === null;
+    const actCount = (s) => [s.k, s.s, s.e, s.g].filter(v => v === true).length;
+    const errCount = (s) => [s.k, s.s, s.e, s.g].filter(v => isError(v)).length;
+    const noDataCount = (s) => [s.k, s.s, s.e, s.g].filter(v => v === null).length;
+    const dayAct = (d) => d.slots.reduce((a, s) => a + actCount(s), 0);
+    const dayHasProblems = (d) => d.slots.some((s, idx) => errCount(s) > 0 || (noDataCount(s) === 4 && isSlotPast(d.date, idx)));
+
+    function getNowSlot() {
+      const h = new Date().getHours();
+      if (h < 4) return 0;
+      if (h < 8) return 1;
+      if (h < 12) return 2;
+      if (h < 14) return 3;
+      if (h < 18) return 4;
+      return 5;
+    }
+
+    // Prüft ob ein Zeitfenster bereits vollständig vergangen ist.
+    // Nur vergangene Slots ohne Daten = echtes Verbindungsproblem.
+    // Aktuelle/zukünftige Slots ohne Daten = einfach noch nicht erfasst.
+    const SLOT_END_HOURS = [4, 8, 12, 14, 18, 24];
+    function isSlotPast(dateStr, slotIdx) {
+      const now = new Date();
+      const today = now.getFullYear() + "-" +
+        String(now.getMonth() + 1).padStart(2, "0") + "-" +
+        String(now.getDate()).padStart(2, "0");
+      if (dateStr < today) return true;   // vergangener Tag → alle Slots vorbei
+      if (dateStr > today) return false;  // zukünftiger Tag → kein Slot vorbei
+      return now.getHours() >= SLOT_END_HOURS[slotIdx]; // heute → Stunde prüfen
+    }
+
+    function getWeather(day) {
+      const act = dayAct(day);
+      const pastSlots = day.slots.filter((s, idx) => isSlotPast(day.date, idx));
+      const allNull = pastSlots.length > 0 && pastSlots.every(s => noDataCount(s) === 4);
+      if (allNull) return { label: "Keine Verbindung", color: "#d4916a", bg: "rgba(212,145,106,0.1)" };
+      if (act >= 8) return { label: "Freundlich", color: "#e8b931", bg: "rgba(232,185,49,0.1)" };
+      if (act >= 4) return { label: "Heiter", color: "#7db8e0", bg: "rgba(125,184,224,0.08)" };
+      if (act >= 1) return { label: "Ruhig", color: "#9aaabe", bg: "rgba(154,170,190,0.08)" };
+      return { label: "Neblig", color: "#6a7a90", bg: "rgba(106,122,144,0.08)" };
+    }
+
+    function timeSince(isoStr) {
+      if (!isoStr) return "unbekannt";
+      const diff = Math.floor((Date.now() - new Date(isoStr).getTime()) / 60000);
+      if (diff < 1) return "gerade eben";
+      if (diff < 60) return "vor " + diff + " Min.";
+      const h = Math.floor(diff / 60);
+      if (h < 24) return "vor " + h + " Std.";
+      return "vor " + Math.floor(h / 24) + " Tag(en)";
+    }
+
+    // ─── COLORS ──────────────────────────────────────────────────────────
+    const C = {
+      kitchen: { on: "#f0c45a", off: "#1a2133" },
+      tv: { on: "#6ba4d4", off: "#1a2133" },
+      door: { on: "#7bc77e", off: "#4a4a50" },
+      bird: { on: "#c49bdb" },
+      error: "#c27a5a", offline: "#8a7050", noData: "#3a3545",
+      textHi: "#e8edf5", textMid: "#a0b0c4", textLo: "#8494a7", textFaint: "#5e7086",
+    };
+
+    function winColor(val, palette) {
+      if (isOn(val)) return palette.on;
+      if (val === "offline") return C.offline;
+      if (val === "fehler") return C.error;
+      if (val === null) return C.noData;
+      return palette.off;
+    }
+
+    const T = (dur = "0.8s") => "all " + dur + " cubic-bezier(0.4, 0, 0.2, 1)";
+
+    function easeInOut(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    // ─── ANIMATED VALUE HOOK ─────────────────────────────────────────────
+    function useAnimatedValue(target, duration) {
+      duration = duration || 1200;
+      const [value, setValue] = useState(target);
+      const animRef = useRef(null);
+      const currentRef = useRef(target);
+
+      useEffect(() => {
+        if (animRef.current) cancelAnimationFrame(animRef.current);
+        const start = currentRef.current;
+        const delta = target - start;
+        if (Math.abs(delta) < 0.1) { setValue(target); currentRef.current = target; return; }
+        const t0 = performance.now();
+
+        function tick(now) {
+          const elapsed = now - t0;
+          const progress = Math.min(elapsed / duration, 1);
+          const eased = easeInOut(progress);
+          const v = start + delta * eased;
+          currentRef.current = v;
+          setValue(v);
+          if (progress < 1) { animRef.current = requestAnimationFrame(tick); }
+        }
+        animRef.current = requestAnimationFrame(tick);
+        return () => { if (animRef.current) cancelAnimationFrame(animRef.current); };
+      }, [target, duration]);
+
+      return value;
+    }
+
+    // ─── ANIMATED COLOR HOOK ─────────────────────────────────────────────
+    // Smooth RGB-Interpolation zwischen zwei Hex-Farben.
+    // Nötig für background-gradients, weil Browser linear-gradients nicht
+    // nativ über CSS `transition` animieren können (der Gradient wird
+    // beim Farbwechsel sonst hart umgeschaltet).
+    function hexToRgb(hex) {
+      var h = hex.replace("#", "");
+      if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+      var num = parseInt(h, 16);
+      return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+    }
+    function rgbToCss(rgb) {
+      return "rgb(" + Math.round(rgb[0]) + "," + Math.round(rgb[1]) + "," + Math.round(rgb[2]) + ")";
+    }
+    function useAnimatedColor(targetHex, duration) {
+      duration = duration || 1200;
+      const targetRgb = hexToRgb(targetHex);
+      const [rgb, setRgb] = useState(targetRgb);
+      const animRef = useRef(null);
+      const currentRef = useRef(targetRgb);
+
+      useEffect(() => {
+        if (animRef.current) cancelAnimationFrame(animRef.current);
+        const start = currentRef.current.slice();
+        const delta = [targetRgb[0] - start[0], targetRgb[1] - start[1], targetRgb[2] - start[2]];
+        if (Math.abs(delta[0]) < 0.5 && Math.abs(delta[1]) < 0.5 && Math.abs(delta[2]) < 0.5) {
+          setRgb(targetRgb); currentRef.current = targetRgb; return;
+        }
+        const t0 = performance.now();
+
+        function tick(now) {
+          const elapsed = now - t0;
+          const progress = Math.min(elapsed / duration, 1);
+          const eased = easeInOut(progress);
+          const v = [start[0] + delta[0] * eased, start[1] + delta[1] * eased, start[2] + delta[2] * eased];
+          currentRef.current = v;
+          setRgb(v);
+          if (progress < 1) { animRef.current = requestAnimationFrame(tick); }
+        }
+        animRef.current = requestAnimationFrame(tick);
+        return () => { if (animRef.current) cancelAnimationFrame(animRef.current); };
+      }, [targetHex, duration]);
+
+      return rgbToCss(rgb);
+    }
+
+    // ─── HOUSE COMPONENT ─────────────────────────────────────────────────
+    function House({ slot, slotName, date, slotIdx, showBird }) {
+      const sky = SKY[slotName];
+      const kOn = isOn(slot.k), sOn = isOn(slot.s), eOn = isOn(slot.e), gOn = isOn(slot.g);
+      const kErr = isError(slot.k), sErr = isError(slot.s), eErr = isError(slot.e), gErr = isError(slot.g);
+      const allNull = noDataCount(slot) === 4;
+      const past = isSlotPast(date, slotIdx);
+      const showFog = allNull && past;       // Keine Verbindung: vergangener Slot ohne Daten
+      const showPending = allNull && !past;   // Noch keine Daten: aktueller/zukünftiger Slot
+      const kFill = winColor(slot.k, C.kitchen);
+      const sFill = winColor(slot.s, C.tv);
+      const isDay = ["Vormittags", "Mittags", "Nachmittags"].includes(slotName);
+      const isDawn = slotName === "Morgens";
+      const isDusk = slotName === "Abends";
+
+      // Schlafendes Reh bei Nachts-Slot
+      const deerSleeping = slotName === "Nachts";
+      const sleepP = useAnimatedValue(deerSleeping ? 1 : 0, 1800);
+      const deerFullyAwake = !deerSleeping && sleepP < 0.05;
+      // Follow-Through: Beine zuerst, dann Körper, Kopf zuletzt
+      const legScale   = 1 - Math.min(sleepP / 0.75, 1);
+      const bodyShift  = Math.min(sleepP / 0.90, 1) * 10;
+      const headAngle  = Math.max((sleepP - 0.12) / 0.88, 0) * 48;
+      const breatheAmp = (sleepP * 1.1).toFixed(2);
+
+      const animAngle = useAnimatedValue(sky.sunAngle, 1200);
+      const sun = sunPos(animAngle);
+
+      const wallBase = isDay ? [62, 72, 100] : isDawn ? [52, 58, 78] : isDusk ? [48, 52, 70] : [45, 50, 65];
+      const wallColor = "rgb(" + wallBase[0] + ", " + wallBase[1] + ", " + wallBase[2] + ")";
+      const roofBase = isDay ? [110, 85, 60] : isDawn ? [95, 70, 52] : [80, 62, 48];
+      const roofColor = "rgb(" + roofBase[0] + ", " + roofBase[1] + ", " + roofBase[2] + ")";
+      const roofEdge = "rgb(" + (roofBase[0]+20) + ", " + (roofBase[1]+15) + ", " + (roofBase[2]+12) + ")";
+      const groundBase = isDay ? [35, 65, 40] : isDawn ? [28, 50, 30] : isDusk ? [25, 42, 28] : [18, 32, 20];
+      const groundColor = "rgb(" + groundBase[0] + ", " + groundBase[1] + ", " + groundBase[2] + ")";
+      const frameBright = isDay ? "#7a8a9a" : isDawn ? "#6a7585" : "#5a6578";
+      const darkWin = isDay ? "#2a3548" : "#1a2133";
+      const kOffFill = kOn ? kFill : (isDay ? "#2a3548" : darkWin);
+      const sOffFill = sOn ? sFill : (isDay ? "#2a3548" : darkWin);
+      const trans = T("0.9s");
+
+      return (
+        <svg viewBox="0 0 520 320" fill="none" style={{ width: "100%", maxWidth: 580, display: "block", margin: "0 auto" }}>
+          <defs>
+            <radialGradient id="gK" cx="0.35" cy="0.55" r="0.45">
+              <stop offset="0%" stopColor={C.kitchen.on} stopOpacity={isDay ? "0.2" : "0.35"} />
+              <stop offset="100%" stopColor={C.kitchen.on} stopOpacity="0" />
+            </radialGradient>
+            <radialGradient id="gS" cx="0.65" cy="0.55" r="0.45">
+              <stop offset="0%" stopColor={C.tv.on} stopOpacity={isDay ? "0.15" : "0.25"} />
+              <stop offset="100%" stopColor={C.tv.on} stopOpacity="0" />
+            </radialGradient>
+            <radialGradient id="sunGlow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor={sky.sunColor} stopOpacity="0.6" />
+              <stop offset="50%" stopColor={sky.sunColor} stopOpacity="0.15" />
+              <stop offset="100%" stopColor={sky.sunColor} stopOpacity="0" />
+            </radialGradient>
+            <filter id="softGlow"><feGaussianBlur stdDeviation="3" /></filter>
+            <filter id="wideGlow"><feGaussianBlur stdDeviation="12" /></filter>
+            <filter id="sunBlur"><feGaussianBlur stdDeviation="6" /></filter>
+            <clipPath id="sceneClip"><rect width="520" height="320" rx="16" /></clipPath>
+          </defs>
+
+          <g clipPath="url(#sceneClip)">
+            {/* SKY */}
+            <rect width="520" height="320" fill={sky.bot} style={{ transition: T("1.2s") }} />
+            <rect width="520" height="200" fill={sky.top} opacity="0.8" style={{ transition: T("1.2s") }} />
+            <ellipse cx="260" cy="290" rx="300" ry="80" fill={sky.horizonColor} opacity={sky.horizonOp} style={{ transition: T("1s") }} />
+
+            {/* STARS */}
+            <g style={{ opacity: sky.stars, transition: T("1.2s") }}>
+              {[[35,22,1.1],[78,38,0.7],[125,15,0.9],[180,28,0.6],[290,12,1.0],[345,35,0.8],[440,20,0.7],[52,55,0.5],[410,50,0.6],[155,45,0.4],[475,42,0.8],[20,48,0.6],[500,8,0.6],[360,52,0.9],[490,28,0.5]].map(([cx,cy,r],i) => (
+                <circle key={i} cx={cx} cy={cy} r={r} fill="#d0d8e8" opacity={0.3 + (i%4)*0.15}>
+                  <animate attributeName="opacity" values={(0.2+(i%3)*0.15)+";"+(0.5+(i%3)*0.1)+";"+(0.2+(i%3)*0.15)} dur={(3+i*0.5)+"s"} repeatCount="indefinite" />
+                </circle>
+              ))}
+            </g>
+
+            {/* MOON */}
+            <g style={{ opacity: sky.moonOp, transition: T("1s") }}>
+              <circle cx="440" cy="48" r="18" fill="#d4dbe8" />
+              <circle cx="446" cy="44" r="16" fill={sky.top} />
+            </g>
+
+            {/* SUN (circular arc) */}
+            <g style={{ opacity: sky.sunOp, transition: "opacity 1s cubic-bezier(0.4, 0, 0.2, 1)" }}>
+              <circle cx={sun.x} cy={sun.y} r="50" fill="url(#sunGlow)" />
+              <circle cx={sun.x} cy={sun.y} r="16" fill={sky.sunColor} style={{ transition: "fill 1s" }} />
+              <circle cx={sun.x} cy={sun.y} r="24" fill={sky.sunColor} opacity="0.12" filter="url(#sunBlur)" style={{ transition: "fill 1s" }} />
+            </g>
+
+            {/* GROUND */}
+            <ellipse cx="260" cy="305" rx="280" ry="30" fill={groundColor} opacity="0.8" style={{ transition: T("1s") }} />
+
+            {/* HOUSE GROUP (centered +60px) */}
+            <g transform="translate(60, 0)">
+              {kOn && <ellipse cx="135" cy="200" rx="80" ry="70" fill="url(#gK)" filter="url(#wideGlow)" />}
+              {sOn && <ellipse cx="265" cy="200" rx="80" ry="70" fill="url(#gS)" filter="url(#wideGlow)" />}
+              {kOn && !isDay && <ellipse cx="130" cy="288" rx="35" ry="6" fill={C.kitchen.on} opacity="0.08" />}
+              {sOn && !isDay && <ellipse cx="270" cy="288" rx="35" ry="6" fill={C.tv.on} opacity="0.06" />}
+              {eOn && !isDay && <ellipse cx="200" cy="292" rx="20" ry="5" fill={C.door.on} opacity="0.1" />}
+
+              {/* CHIMNEY */}
+              <rect x="275" y="88" width="20" height="45" rx="2" fill="#4a4a55" style={{ transition: trans }} />
+              <rect x="272" y="84" width="26" height="7" rx="2" fill="#5a5a62" />
+              {kOn && [0,1,2].map(i => (
+                <circle key={i} cx={285+i*3} cy={75} r={3+i} fill={isDay ? "#a0a8b8" : "#8090a8"} opacity={isDay ? 0.12 : 0.08}>
+                  <animate attributeName="cy" values={(75-i*5)+";"+(50-i*8)+";"+(25-i*10)} dur={(4+i)+"s"} repeatCount="indefinite" />
+                  <animate attributeName="opacity" values={(isDay?0.12:0.1)+";"+(isDay?0.06:0.05)+";0"} dur={(4+i)+"s"} repeatCount="indefinite" />
+                  <animate attributeName="r" values={(3+i)+";"+(5+i*1.5)+";"+(8+i*2)} dur={(4+i)+"s"} repeatCount="indefinite" />
+                </circle>
+              ))}
+
+              {/* ROOF */}
+              <polygon points="55,148 200,62 345,148" fill={roofColor} style={{ transition: trans }} />
+              <polygon points="55,148 200,62 345,148" fill="none" stroke={roofEdge} strokeWidth="1" strokeLinejoin="round" style={{ transition: trans }} />
+
+              {/* WALLS */}
+              <rect x="75" y="148" width="250" height="130" fill={wallColor} style={{ transition: trans }} />
+              <rect x="75" y="148" width="250" height="130" fill="none" stroke={"rgba(255,255,255,"+(isDay?0.08:0.04)+")"} strokeWidth="0.8" />
+              {[168,188,208,228,248].map((y,i) => (
+                <line key={i} x1="80" y1={y} x2="320" y2={y} stroke={"rgba(255,255,255,"+(isDay?0.04:0.02)+")"} strokeWidth="0.3" />
+              ))}
+
+              {/* KITCHEN WINDOW */}
+              <g>
+                <rect x="100" y="165" width="60" height="48" rx="2" fill={isDay ? "#1e2a3e" : "#1a2030"} />
+                <rect x="96" y="213" width="68" height="5" rx="1.5" fill={frameBright} style={{ transition: trans }} />
+                <rect x="96" y="212" width="68" height="2" rx="1" fill={frameBright} style={{ transition: trans }} />
+                {[[102,167,26,21,0.85],[132,167,26,21,0.75],[102,191,26,20,0.7],[132,191,26,20,0.8]].map(([x,y,w,h,op],i) => (
+                  <rect key={i} x={x} y={y} width={w} height={h} rx="1" fill={kOn ? kFill : kOffFill} opacity={kOn ? op : 1} style={{ transition: T("0.6s") }} />
+                ))}
+                <rect x="100" y="165" width="60" height="48" rx="2" fill="none" stroke={frameBright} strokeWidth="1.5" style={{ transition: trans }} />
+                <line x1="130" y1="165" x2="130" y2="213" stroke={frameBright} strokeWidth="1.5" style={{ transition: trans }} />
+                <line x1="100" y1="189" x2="160" y2="189" stroke={frameBright} strokeWidth="1.5" style={{ transition: trans }} />
+                {kOn && <rect x="100" y="165" width="60" height="48" rx="2" fill={C.kitchen.on} opacity={isDay?0.08:0.15} filter="url(#softGlow)">
+                  <animate attributeName="opacity" values={(isDay?0.05:0.1)+";"+(isDay?0.12:0.2)+";"+(isDay?0.05:0.1)} dur="5s" repeatCount="indefinite" />
+                </rect>}
+                <path d="M102,167 Q108,175 102,189" stroke={frameBright} strokeWidth="0.4" fill="none" opacity="0.2" style={{ transition: trans }} />
+                <path d="M158,167 Q152,175 158,189" stroke={frameBright} strokeWidth="0.4" fill="none" opacity="0.2" style={{ transition: trans }} />
+                {isDay && !kOn && <rect x="103" y="168" width="8" height="10" rx="1" fill="white" opacity="0.06" />}
+                {kErr && <g><circle cx="157" cy="168" r="6" fill="rgba(20,20,30,0.8)" /><text x="157" y="172" textAnchor="middle" fontSize="10" fill={isFehler(slot.k)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}
+              </g>
+
+              {/* TV WINDOW */}
+              <g>
+                <rect x="240" y="165" width="60" height="48" rx="2" fill={isDay ? "#1e2a3e" : "#1a2030"} />
+                <rect x="236" y="213" width="68" height="5" rx="1.5" fill={frameBright} style={{ transition: trans }} />
+                <rect x="236" y="212" width="68" height="2" rx="1" fill={frameBright} style={{ transition: trans }} />
+                {[[242,167,26,21,0.75],[272,167,26,21,0.85],[242,191,26,20,0.8],[272,191,26,20,0.7]].map(([x,y,w,h,op],i) => (
+                  <rect key={i} x={x} y={y} width={w} height={h} rx="1" fill={sOn ? sFill : sOffFill} opacity={sOn ? op : 1} style={{ transition: T("0.6s") }} />
+                ))}
+                <rect x="240" y="165" width="60" height="48" rx="2" fill="none" stroke={frameBright} strokeWidth="1.5" style={{ transition: trans }} />
+                <line x1="270" y1="165" x2="270" y2="213" stroke={frameBright} strokeWidth="1.5" style={{ transition: trans }} />
+                <line x1="240" y1="189" x2="300" y2="189" stroke={frameBright} strokeWidth="1.5" style={{ transition: trans }} />
+                {sOn && <rect x="240" y="165" width="60" height="48" rx="2" fill={C.tv.on} opacity={isDay?0.06:0.12} filter="url(#softGlow)">
+                  <animate attributeName="opacity" values={(isDay?0.04:0.08)+";"+(isDay?0.1:0.18)+";"+(isDay?0.03:0.06)+";"+(isDay?0.08:0.14)+";"+(isDay?0.04:0.08)} dur="3s" repeatCount="indefinite" />
+                </rect>}
+                <path d="M242,167 Q248,175 242,189" stroke={frameBright} strokeWidth="0.4" fill="none" opacity="0.2" />
+                <path d="M298,167 Q292,175 298,189" stroke={frameBright} strokeWidth="0.4" fill="none" opacity="0.2" />
+                {isDay && !sOn && <rect x="243" y="168" width="8" height="10" rx="1" fill="white" opacity="0.06" />}
+                {sErr && <g><circle cx="297" cy="168" r="6" fill="rgba(20,20,30,0.8)" /><text x="297" y="172" textAnchor="middle" fontSize="10" fill={isFehler(slot.s)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}
+              </g>
+
+              {/* DOOR */}
+              <g>
+                <rect x="181" y="218" width="38" height="60" rx="2" fill="#3a3a42" />
+                <rect x="183" y="220" width="34" height="56" rx="1.5" fill={eOn ? "#5a9b5e" : eErr ? (isFehler(slot.e) ? "#7a4a3a" : "#5a4a30") : "#4a4a52"} style={{ transition: T("0.6s") }} />
+                <rect x="187" y="224" width="26" height="18" rx="1" fill={eOn ? "#4d8a50" : "#3e3e46"} stroke={eOn ? "#6aaa6e" : "#555"} strokeWidth="0.5" style={{ transition: T("0.6s") }} />
+                <rect x="187" y="248" width="26" height="20" rx="1" fill={eOn ? "#4d8a50" : "#3e3e46"} stroke={eOn ? "#6aaa6e" : "#555"} strokeWidth="0.5" style={{ transition: T("0.6s") }} />
+                <circle cx={eOn ? 191 : 209} cy="252" r="2" fill={eOn ? "#a0d0a2" : "#888"} style={{ transition: T("0.4s") }} />
+                {eOn && <React.Fragment><rect x="183" y="220" width="10" height="56" rx="1" fill="#8fce92" opacity="0.3" /><path d="M183,276 L170,290 L196,290 Z" fill={C.door.on} opacity="0.06" /></React.Fragment>}
+                <rect x="178" y="276" width="44" height="4" rx="1" fill={frameBright} style={{ transition: trans }} />
+                <path d="M176,218 Q200,210 224,218" fill="none" stroke={roofEdge} strokeWidth="1.5" style={{ transition: trans }} />
+                {eErr && <g><circle cx="216" cy="222" r="6" fill="rgba(20,20,30,0.8)" /><text x="216" y="226" textAnchor="middle" fontSize="10" fill={isFehler(slot.e)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}
+              </g>
+
+              {/* BIRD (only in extended mode) — sitzt auf dem Dach und singt */}
+              {showBird && gOn && <g transform="translate(180, 75)" style={{ transition: trans }}>
+                {/* Schwanzgefieder (nach hinten/links herausstehend) */}
+                <path d="M -7,-7 L -18,-12 L -13,-6 Z" fill={C.bird.on} opacity="0.7" />
+                <path d="M -7,-5 L -17,-2 L -12,-1 Z" fill={C.bird.on} opacity="0.55" />
+
+                {/* Körper — tropfenförmig, nach rechts blickend */}
+                <path d="M -5,-14 C -1,-19 11,-18 15,-12 C 18,-6 13,0 6,0 C -2,0 -8,-5 -6,-11 C -6,-13 -6,-14 -5,-14 Z"
+                      fill={C.bird.on} opacity="0.92" />
+
+                {/* Bauch-Highlight (leichter Schimmer) */}
+                <ellipse cx="5" cy="-4" rx="6" ry="2.5" fill="#fff" opacity="0.1" />
+
+                {/* Gefalteter Flügel */}
+                <path d="M -1,-11 C 3,-15 12,-12 12,-4 C 8,-2 1,-6 -1,-11 Z"
+                      fill={C.bird.on} opacity="0.55" />
+                <path d="M 1,-11 C 5,-13 10,-11 11,-7" stroke={C.bird.on} strokeWidth="0.6" fill="none" opacity="0.7" />
+
+                {/* Kopf */}
+                <circle cx="12" cy="-17" r="6" fill={C.bird.on} opacity="0.95" />
+
+                {/* Schnabel — spitz, leicht geöffnet (singt!) */}
+                <path d="M 17,-18 L 24,-19 L 17,-17 Z" fill="#f4a261" />
+                <path d="M 17,-16.5 L 24,-17 L 17,-15.5 Z" fill="#c76d3e" opacity="0.7" />
+
+                {/* Auge mit Highlight */}
+                <circle cx="13" cy="-18" r="1.7" fill="#1a1a2e" />
+                <circle cx="13.6" cy="-18.4" r="0.6" fill="#fff" opacity="0.9" />
+
+                {/* Musiknoten schweben nach oben und verblassen */}
+                <g fontFamily="serif" fill={C.bird.on}>
+                  <text x="27" y="-22" fontSize="15">
+                    <animate attributeName="opacity" values="0;0.9;0.9;0" dur="3s" repeatCount="indefinite" />
+                    <animate attributeName="y" values="-22;-28;-34;-40" dur="3s" repeatCount="indefinite" />
+                    {"♪"}
+                  </text>
+                  <text x="33" y="-26" fontSize="12">
+                    <animate attributeName="opacity" values="0;0;0.8;0.8;0" dur="3.6s" repeatCount="indefinite" />
+                    <animate attributeName="y" values="-26;-26;-32;-38;-44" dur="3.6s" repeatCount="indefinite" />
+                    {"♫"}
+                  </text>
+                  <text x="23" y="-28" fontSize="11">
+                    <animate attributeName="opacity" values="0;0;0;0.7;0.7;0" dur="4.2s" repeatCount="indefinite" />
+                    <animate attributeName="y" values="-28;-28;-28;-34;-40;-46" dur="4.2s" repeatCount="indefinite" />
+                    {"♬"}
+                  </text>
+                </g>
+              </g>}
+              {showBird && gErr && !gOn && <g transform="translate(180, 75)"><circle cx="0" cy="0" r="6" fill="rgba(20,20,30,0.8)" /><text x="0" y="4" textAnchor="middle" fontSize="10" fill={isFehler(slot.g)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}
+
+              {/* GARDEN */}
+              <path d="M200,280 Q195,290 188,305 Q200,308 212,305 Q205,290 200,280" fill={groundColor} opacity="0.6" style={{ transition: trans }} />
+              {[35,48,61,74].map(x => (<g key={"fl"+x}><rect x={x} y="268" width="3" height="16" rx="0.5" fill={roofColor} style={{ transition: trans }} /><circle cx={x+1.5} cy="268" r="2" fill={roofColor} style={{ transition: trans }} /></g>))}
+              <rect x="35" y="273" width="42" height="2.5" rx="1" fill={roofColor} style={{ transition: trans }} />
+              {[326,339,352,365].map(x => (<g key={"fr"+x}><rect x={x} y="268" width="3" height="16" rx="0.5" fill={roofColor} style={{ transition: trans }} /><circle cx={x+1.5} cy="268" r="2" fill={roofColor} style={{ transition: trans }} /></g>))}
+              <rect x="326" y="273" width="42" height="2.5" rx="1" fill={roofColor} style={{ transition: trans }} />
+              {[[90,276,18,10],[80,278,12,7],[310,276,18,10],[320,278,12,7]].map(([cx,cy,rx,ry],i) => (
+                <ellipse key={i} cx={cx} cy={cy} rx={rx} ry={ry} fill={groundColor} opacity={0.8 - i*0.05} style={{ transition: trans }} />
+              ))}
+              <rect x="340" y="258" width="3" height="22" fill="#4a4a55" />
+              <rect x="335" y="253" width="14" height="10" rx="2" fill="#4a4a55" />
+
+              {/* REH — süßes Bambi im linken Garten, steht zwischen den Blumen.
+                  Bei Nachts-Slot: schläft (Körper sinkt, Beine retrahieren, Kopf legt sich vor den Körper).
+                  sleepP=0 (wach) → sleepP=1 (schläft), animiert via useAnimatedValue (1800ms).
+                  Follow-Through: Beine zuerst, Körper leicht verzögert, Kopf zuletzt. */}
+              <g transform="translate(65, 293)" style={{ filter: isDay ? "brightness(1.15) saturate(1.05)" : isDawn ? "brightness(0.9) saturate(0.95)" : isDusk ? "brightness(0.72) saturate(0.9)" : "brightness(0.55) saturate(0.75)", transition: "filter 1.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
+
+                {/* Schatten — etwas schwächer wenn schlafend */}
+                <ellipse cx="-2" cy="15" rx="19" ry="2.2" fill="#000" opacity={0.28 - sleepP * 0.13} />
+
+                {/* BEINE — schrumpfen von unten nach oben (Pivot y=2, Oberkante der Beine).
+                    SVG-Transform: translate(0,2) scale(1,Y) translate(0,-2) hält y=2 fest
+                    und zieht Hufe (y=15) nach oben. Bei sleepP=1: Beine komplett hinter Körper. */}
+                <g transform={`translate(0, 2) scale(1, ${legScale}) translate(0, -2)`}>
+                  <rect x="-14" y="2" width="2.6" height="13" rx="1.3" fill="#8b5a3c" />
+                  <ellipse cx="-12.7" cy="15" rx="1.6" ry="0.9" fill="#3a2416" />
+                  <rect x="-9.5" y="2" width="2.6" height="13" rx="1.3" fill="#8b5a3c" />
+                  <ellipse cx="-8.2" cy="15" rx="1.6" ry="0.9" fill="#3a2416" />
+                  <rect x="6" y="2" width="2.6" height="13" rx="1.3" fill="#8b5a3c" />
+                  <ellipse cx="7.3" cy="15" rx="1.6" ry="0.9" fill="#3a2416" />
+                  <rect x="10.5" y="2" width="2.6" height="13" rx="1.3" fill="#8b5a3c" />
+                  <ellipse cx="11.8" cy="15" rx="1.6" ry="0.9" fill="#3a2416" />
+                </g>
+
+                {/* KÖRPER + KOPF — sinken gemeinsam auf den Boden ab (bodyShift: 0→10 SVG-Einheiten).
+                    Körper-Unterkante (y=5) erreicht Bodenniveau (y=15) wenn sleepP=1. */}
+                <g transform={`translate(0, ${bodyShift})`}>
+                  {/* ATEM-GRUPPE — Amplitude skaliert mit sleepP (0→1.1 SVG-Einh.). Beim Aufwachen
+                      schwindet die Amplitude automatisch wieder auf 0. */}
+                  <g>
+                    <animateTransform
+                      attributeName="transform"
+                      type="translate"
+                      values={`0,0; 0,-${breatheAmp}; 0,0`}
+                      keyTimes="0; 0.45; 1"
+                      dur="3.8s"
+                      repeatCount="indefinite"
+                      calcMode="spline"
+                      keySplines="0.42 0 0.58 1; 0.42 0 0.58 1"
+                    />
+
+                  {/* Körper — warmes Braun */}
+                  <ellipse cx="-2" cy="-3" rx="17" ry="8" fill="#a6724a" />
+                  {/* Weiße Bauchunterseite */}
+                  <ellipse cx="-2" cy="3" rx="13" ry="3.5" fill="#f5e6c4" opacity="0.9" />
+
+                  {/* Bambi-Flecken auf dem Rücken */}
+                  <circle cx="-10" cy="-7" r="1.4" fill="#fff" opacity="0.75" />
+                  <circle cx="-5" cy="-9" r="1.2" fill="#fff" opacity="0.7" />
+                  <circle cx="0" cy="-7.5" r="1.3" fill="#fff" opacity="0.75" />
+                  <circle cx="5" cy="-9" r="1.2" fill="#fff" opacity="0.65" />
+                  <circle cx="9" cy="-5" r="1" fill="#fff" opacity="0.6" />
+                  <circle cx="-13" cy="-4" r="0.9" fill="#fff" opacity="0.55" />
+                  <circle cx="-7" cy="-4" r="0.8" fill="#fff" opacity="0.5" />
+
+                  {/* Spiegel (statisch, leicht transparent) */}
+                  <ellipse cx="-17" cy="-4" rx="2.5" ry="3.5" fill="#fff" opacity="0.80" />
+
+                  {/* Wedel — kein Zucken wenn schlafend */}
+                  <g transform="translate(-17, -8)">
+                    {deerFullyAwake && <animateTransform
+                      attributeName="transform"
+                      type="rotate"
+                      values="0;0;-22;0;0;-25;18;-15;0;0;-22;0;0;-20;15;0;0"
+                      keyTimes="0;0.414;0.421;0.427;0.593;0.599;0.604;0.610;0.616;0.764;0.770;0.776;0.893;0.899;0.904;0.910;1"
+                      calcMode="linear"
+                      dur="14s"
+                      repeatCount="indefinite"
+                      additive="sum"
+                    />}
+                    <path d="M 0,0 C -2,-0.5 -2,-5.5 0,-5.5 C 2,-5.5 2,-0.5 0,0 Z" fill="#fff" />
+                  </g>
+
+                  {/* KOPF-WRAPPER — Schlaf-Rotation um Hals-Pivot (11,-3).
+                      headAngle: 0° (wach, Kopf oben) → 48° (schlafend, Kopf vor Körper gelegt).
+                      headTilt (innen): -sleepP×10° CCW um Schädelbasis (16,-13) — Nase leicht nach
+                      oben, Stirn nach unten, wirkt wie "Kopf zur Seite legen".
+                      Grasen-SMIL nur aktiv wenn deerFullyAwake (!deerSleeping && sleepP < 0.05). */}
+                  <g transform={`rotate(${headAngle}, 11, -3)`}>
+                    <g transform={deerFullyAwake ? undefined : `rotate(${-sleepP * 10}, 16, -13)`}>
+                      {deerFullyAwake && <animateTransform
+                        attributeName="transform"
+                        attributeType="XML"
+                        type="rotate"
+                        values="0 11 -3; 0 11 -3; 65 11 -3; 68 11 -3; 63 11 -3; 67 11 -3; 64 11 -3; 69 11 -3; 63 11 -3; 65 11 -3; 0 11 -3; 0 11 -3"
+                        keyTimes="0; 0.4; 0.47; 0.505; 0.535; 0.565; 0.59; 0.622; 0.652; 0.68; 0.75; 1"
+                        dur="16s"
+                        repeatCount="indefinite"
+                        calcMode="spline"
+                        keySplines="0.4 0 0.2 1; 0.4 0 0.2 1; 0.6 0 0.2 1; 0.2 0 0.6 1; 0.6 0 0.2 1; 0.2 0 0.5 1; 0.6 0 0.2 1; 0.2 0 0.6 1; 0.4 0 0.2 1; 0.4 0 0.2 1; 0.4 0 0.2 1"
+                      />}
+
+                      {/* Hals */}
+                      <path d="M 8,-6 Q 13,-11 17,-13 L 21,-11 Q 16,-6 11,-3 Z" fill="#a6724a" />
+
+                      {/* Kopf */}
+                      <path d="M 14,-22 Q 20,-26 25,-22 Q 29,-18 29,-13 Q 28,-9 24,-9 Q 19,-10 15,-12 Q 12,-15 13,-20 Z" fill="#a6724a" />
+                      {/* Wange-Highlight */}
+                      <ellipse cx="19" cy="-14" rx="2.5" ry="2" fill="#c2875f" opacity="0.55" />
+
+                      {/* Schnauzenbereich */}
+                      <ellipse cx="27" cy="-12.5" rx="3.2" ry="2.4" fill="#c9956b" />
+                      <ellipse cx="28.5" cy="-12.2" rx="1" ry="0.8" fill="#1a1a1a" />
+                      <circle cx="28.7" cy="-12.5" r="0.32" fill="#fff" opacity="0.6" />
+
+                      {/* Offenes Auge (blinzeln) — äußere Gruppe regelt Schlaf-Fade,
+                          innere Gruppe animiert Blinzeln. Opazitäten multiplizieren sich. */}
+                      <g opacity={1 - sleepP}>
+                        <g>
+                          <animate
+                            attributeName="opacity"
+                            values="1;1;1;1;0;1;1;1;1;0;1;1"
+                            keyTimes="0;0.15;0.17;0.18;0.185;0.19;0.5;0.52;0.53;0.535;0.54;1"
+                            dur="7s"
+                            repeatCount="indefinite"
+                          />
+                          <ellipse cx="21" cy="-16.5" rx="1.6" ry="2" fill="#1a1a1a" />
+                          <circle cx="21.5" cy="-17.1" r="0.65" fill="#fff" />
+                          <circle cx="21" cy="-15.8" r="0.28" fill="#fff" opacity="0.8" />
+                        </g>
+                      </g>
+
+                      {/* Geschlossenes Schlaf-Auge — einfacher Bogen, blendet mit sleepP ein */}
+                      <path
+                        d="M 19.2,-16.5 Q 21,-14.8 22.8,-16.5"
+                        stroke="#1a1a1a"
+                        strokeWidth="1.3"
+                        fill="none"
+                        strokeLinecap="round"
+                        opacity={sleepP}
+                      />
+
+                      {/* Ohren — kein Zucken wenn schlafend */}
+                      <g transform="translate(17, -24)">
+                        <g>
+                          {deerFullyAwake && <animateTransform
+                            attributeName="transform"
+                            type="rotate"
+                            values="0;0;-16;0;0;-18;12;-12;0;0;0;0;-14;0;0"
+                            keyTimes="0;0.150;0.155;0.160;0.325;0.330;0.335;0.340;0.345;0.400;0.750;0.900;0.905;0.910;1"
+                            calcMode="linear"
+                            dur="16s"
+                            repeatCount="indefinite"
+                          />}
+                          <ellipse cx="0" cy="-4.5" rx="1.8" ry="4.5" fill="#8b5a3c" />
+                          <ellipse cx="0" cy="-4" rx="1" ry="3.2" fill="#c2875f" opacity="0.9" />
+                        </g>
+                      </g>
+
+                      <g transform="translate(19, -22)">
+                        <g>
+                          {deerFullyAwake && <animateTransform
+                            attributeName="transform"
+                            type="rotate"
+                            values="3;3;-14;3;3;-12;18;-6;3;3;3;3;-10;3;3"
+                            keyTimes="0;0.100;0.105;0.110;0.250;0.255;0.260;0.265;0.270;0.400;0.750;0.850;0.855;0.860;1"
+                            calcMode="linear"
+                            dur="16s"
+                            repeatCount="indefinite"
+                          />}
+                          <ellipse cx="0" cy="-6.5" rx="2.3" ry="6.5" fill="#a6724a" />
+                          <ellipse cx="0" cy="-6" rx="1.4" ry="4.8" fill="#e0a88a" />
+                        </g>
+                      </g>
+                    </g>
+                  </g>
+
+                  {/* Schlaf-Zzzs — steigen aus Kopfbereich auf und faden aus (wie Musiknoten beim Vogel).
+                      Im Körper-lokalen Koordinatensystem: Kopf liegt bei ca. (29, -5) wenn schlafend.
+                      Alle drei Zs gestaffelt (begin=-1.8s / -2.5s) → immer mehrere gleichzeitig sichtbar. */}
+                  {sleepP > 0.6 && (
+                    <g opacity={Math.min((sleepP - 0.6) / 0.4, 1)} fontFamily="Georgia, 'Times New Roman', serif" fontWeight="bold">
+                      <text x="35" y="-10" fontSize="5.5" fill="#b0cce0" textAnchor="middle">
+                        Z
+                        <animate attributeName="y" values="-10; -38" dur="4s" repeatCount="indefinite" calcMode="spline" keySplines="0.4 0 0.6 1" />
+                        <animate attributeName="opacity" values="0; 0.9; 0.9; 0" keyTimes="0; 0.12; 0.78; 1" dur="4s" repeatCount="indefinite" />
+                      </text>
+                      <text x="31" y="-8" fontSize="4" fill="#98bcd4" textAnchor="middle">
+                        z
+                        <animate attributeName="y" values="-8; -30" dur="3.2s" begin="-1.8s" repeatCount="indefinite" calcMode="spline" keySplines="0.4 0 0.6 1" />
+                        <animate attributeName="opacity" values="0; 0.8; 0.8; 0" keyTimes="0; 0.15; 0.75; 1" dur="3.2s" begin="-1.8s" repeatCount="indefinite" />
+                      </text>
+                      <text x="40" y="-13" fontSize="3.2" fill="#88acc4" textAnchor="middle">
+                        z
+                        <animate attributeName="y" values="-13; -33" dur="2.8s" begin="-2.5s" repeatCount="indefinite" calcMode="spline" keySplines="0.4 0 0.6 1" />
+                        <animate attributeName="opacity" values="0; 0.7; 0.65; 0" keyTimes="0; 0.18; 0.72; 1" dur="2.8s" begin="-2.5s" repeatCount="indefinite" />
+                      </text>
+                    </g>
+                  )}
+
+                  </g>
+                </g>
+              </g>
+            </g>
+
+            {/* FOG OVERLAY — nur bei vergangenen Slots ohne Daten */}
+            {showFog && <React.Fragment>
+              <rect width="520" height="320" fill={sky.top} opacity="0.6" style={{ transition: trans }} />
+              <ellipse cx="260" cy="210" rx="180" ry="90" fill="rgba(60,60,80,0.3)" />
+              <text x="260" y="195" textAnchor="middle" fontSize="15" fill={C.error} fontFamily={ffSerif} fontStyle="italic" opacity="0.9">Keine Verbindung</text>
+              <text x="260" y="215" textAnchor="middle" fontSize="11" fill={C.textLo} fontFamily={ff}>Wetterstation nicht erreichbar</text>
+            </React.Fragment>}
+            {/* PENDING OVERLAY — aktuelle/zukünftige Slots ohne Daten */}
+            {showPending && <React.Fragment>
+              <rect width="520" height="320" fill={sky.top} opacity="0.4" style={{ transition: trans }} />
+              <text x="260" y="200" textAnchor="middle" fontSize="14" fill={C.textLo} fontFamily={ffSerif} fontStyle="italic" opacity="0.8">Noch keine Daten</text>
+              <text x="260" y="220" textAnchor="middle" fontSize="11" fill={C.textFaint} fontFamily={ff}>Nächste Messung in Kürze</text>
+            </React.Fragment>}
+          </g>
+        </svg>
+      );
+    }
+
+    // ─── MINI HOUSE ──────────────────────────────────────────────────────
+    function MiniHouse({ slot, date, slotIdx, showBird, lg }) {
+      const allNull = noDataCount(slot) === 4;
+      const past = isSlotPast(date, slotIdx);
+      const noConnection = allNull && past;
+      const pending = allNull && !past;
+      const sz = lg ? 38 : 30;
+      const szH = lg ? 35 : 28;
+      return (
+        <svg viewBox="0 0 30 28" fill="none" style={{ width: sz, height: szH }}>
+          <polygon points="3,14 15,5 27,14" fill="#4a3828" />
+          <rect x="5" y="14" width="20" height="12" fill="#2d3548" />
+          {noConnection ? <React.Fragment>
+            <rect x="5" y="14" width="20" height="12" fill="#2a2a35" opacity="0.7" />
+            <line x1="10" y1="19" x2="20" y2="19" stroke={C.error} strokeWidth="0.8" opacity="0.5" />
+          </React.Fragment> : pending ? <React.Fragment>
+            <rect x="5" y="14" width="20" height="12" fill="#2a2a35" opacity="0.4" />
+            <text x="15" y="22" textAnchor="middle" fontSize="5" fill={C.textFaint}>···</text>
+          </React.Fragment> : <React.Fragment>
+            <rect x="7" y="16" width="6" height="4" rx="0.5" fill={winColor(slot.k, C.kitchen)} opacity={isOn(slot.k)?0.8:1} />
+            <rect x="17" y="16" width="6" height="4" rx="0.5" fill={winColor(slot.s, C.tv)} opacity={isOn(slot.s)?0.8:1} />
+            <rect x="13" y="20" width="4" height="6" rx="0.5" fill={isOn(slot.e)?"#5a9b5e":isError(slot.e)?"#7a4a3a":"#3a3a42"} />
+            {showBird && isOn(slot.g) && <circle cx="19" cy="9" r="1.5" fill={C.bird.on} opacity="0.7" />}
+          </React.Fragment>}
+        </svg>
+      );
+    }
+
+    // ─── LEGEND DOT ──────────────────────────────────────────────────────
+    function LegendDot({ color, label, value, mob }) {
+      const on = isOn(value); const err = isError(value); const nd = isNoData(value);
+      const dotColor = err ? (isFehler(value) ? C.error : C.offline) : color;
+      const opacity = on ? 1 : err ? 0.8 : nd ? 0.15 : 0.25;
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: mob ? 10 : 8, opacity: opacity, transition: T("0.5s") }}>
+          <div style={{ position: "relative" }}>
+            <div style={{
+              width: mob ? 12 : 10, height: mob ? 12 : 10, borderRadius: "50%", backgroundColor: dotColor,
+              boxShadow: on ? "0 0 10px "+color+", 0 0 3px "+color : err ? "0 0 6px "+dotColor : "none",
+              transition: T("0.5s"),
+            }} />
+            {err && <div style={{
+              position: "absolute", top: -3, right: -4, width: 8, height: 8, borderRadius: "50%",
+              backgroundColor: "rgba(20,20,30,0.85)", display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 7, fontWeight: 700, color: dotColor, fontFamily: ff,
+            }}>!</div>}
+          </div>
+          <span style={{ fontSize: mob ? 16 : 15, color: C.textMid, letterSpacing: 0.5, fontFamily: ff }}>{label}</span>
+        </div>
+      );
+    }
+
+    // ─── EMPTY STATE ─────────────────────────────────────────────────────
+    function EmptyState() {
+      return (
+        <div style={{ textAlign: "center", padding: "80px 20px", color: C.textLo, fontFamily: ff }}>
+          <div style={{ fontSize: 48, marginBottom: 20, opacity: 0.3 }}>{"☁️"}</div>
+          <div style={{ fontSize: 18, marginBottom: 8 }}>Noch keine Wetterdaten</div>
+          <div style={{ fontSize: 13, color: C.textFaint }}>
+            Die Wetterstation sammelt Daten. Schau in 30 Minuten nochmal vorbei.
+          </div>
+        </div>
+      );
+    }
+
+    // ─── LOGIN SCREEN ───────────────────────────────────────────────────
+    function LoginScreen({ onSubmit, wrongPw, mob }) {
+      const [input, setInput] = useState("");
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        onSubmit(input);
+      };
+
+      return (
+        <div style={{
+          minHeight: "100vh",
+          background: "linear-gradient(180deg, #080e1a 0%, #141e30 100%)",
+          color: C.textHi,
+          fontFamily: ff,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "20px",
+          position: "relative",
+        }}>
+          <div style={{
+            textAlign: "center",
+            marginBottom: "60px",
+          }}>
+            <div style={{
+              fontSize: mob ? 11 : 12,
+              letterSpacing: 4,
+              color: C.textLo,
+              textTransform: "uppercase",
+              fontWeight: 500,
+              marginBottom: "12px",
+            }}>
+              Mama Wetter
+            </div>
+          </div>
+
+          <form onSubmit={handleSubmit} style={{
+            width: "100%",
+            maxWidth: "300px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "16px",
+          }}>
+            <div style={{
+              fontSize: mob ? 14 : 13,
+              color: wrongPw ? C.error : C.textMid,
+              textAlign: "center",
+              fontWeight: 500,
+              transition: T("0.3s"),
+            }}>
+              {wrongPw ? "Falsches Passwort" : "Passwort eingeben"}
+            </div>
+
+            <input
+              type="password"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder=""
+              style={{
+                padding: "12px 16px",
+                backgroundColor: "rgba(255, 255, 255, 0.05)",
+                border: "1px solid " + (wrongPw ? C.error + "55" : "rgba(255, 255, 255, 0.1)"),
+                borderRadius: "8px",
+                color: C.textHi,
+                fontSize: "16px",
+                fontFamily: ff,
+                textAlign: "center",
+                transition: T("0.3s"),
+                outline: "none",
+              }}
+              onFocus={(e) => {
+                e.target.style.borderColor = wrongPw ? C.error + "88" : "rgba(255, 255, 255, 0.2)";
+              }}
+              onBlur={(e) => {
+                e.target.style.borderColor = wrongPw ? C.error + "55" : "rgba(255, 255, 255, 0.1)";
+              }}
+            />
+
+            <button
+              type="submit"
+              style={{
+                padding: "12px 24px",
+                backgroundColor: "rgba(255, 255, 255, 0.08)",
+                border: "1px solid rgba(255, 255, 255, 0.15)",
+                borderRadius: "8px",
+                color: C.textMid,
+                fontSize: mob ? 15 : 14,
+                fontWeight: 500,
+                fontFamily: ff,
+                cursor: "pointer",
+                transition: T("0.3s"),
+                letterSpacing: 0.5,
+              }}
+              onMouseEnter={(e) => {
+                e.target.style.backgroundColor = "rgba(255, 255, 255, 0.12)";
+                e.target.style.borderColor = "rgba(255, 255, 255, 0.25)";
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.backgroundColor = "rgba(255, 255, 255, 0.08)";
+                e.target.style.borderColor = "rgba(255, 255, 255, 0.15)";
+              }}
+            >
+              Öffnen
+            </button>
+          </form>
+
+          <div style={{ position: "absolute", bottom: "20px", left: 0, right: 0, textAlign: "center", fontSize: mob ? 10 : 9, color: C.textFaint, opacity: 0.6, letterSpacing: 0.5 }}>
+            Frontend v{FRONTEND_VERSION}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── LOADING SCREEN ──────────────────────────────────────────────────
+    function LoadingScreen({ mob }) {
+      const [progress, setProgress] = useState(0);
+      const [fadeIn, setFadeIn] = useState(false);
+
+      useEffect(() => {
+        requestAnimationFrame(() => setFadeIn(true));
+        const steps = [
+          { delay: 100, value: 15 },
+          { delay: 400, value: 35 },
+          { delay: 800, value: 55 },
+          { delay: 1400, value: 72 },
+          { delay: 2200, value: 85 },
+          { delay: 3200, value: 92 },
+        ];
+        const timers = steps.map(s => setTimeout(() => setProgress(s.value), s.delay));
+        return () => timers.forEach(clearTimeout);
+      }, []);
+
+      return (
+        <div style={{
+          minHeight: "100vh",
+          background: "linear-gradient(180deg, #080e1a 0%, #141e30 100%)",
+          color: C.textHi,
+          fontFamily: ff,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "20px",
+          opacity: fadeIn ? 1 : 0,
+          transition: "opacity 0.6s ease",
+        }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{
+              fontSize: mob ? 11 : 12,
+              letterSpacing: 4,
+              color: C.textLo,
+              textTransform: "uppercase",
+              fontWeight: 500,
+              marginBottom: 32,
+              opacity: fadeIn ? 1 : 0,
+              transform: fadeIn ? "translateY(0)" : "translateY(8px)",
+              transition: "all 0.8s cubic-bezier(0.4, 0, 0.2, 1) 0.2s",
+            }}>
+              Mama Wetter
+            </div>
+
+            <div style={{
+              width: mob ? 180 : 200,
+              height: 3,
+              borderRadius: 1.5,
+              backgroundColor: "rgba(255,255,255,0.06)",
+              margin: "0 auto 24px",
+              overflow: "hidden",
+            }}>
+              <div style={{
+                width: progress + "%",
+                height: "100%",
+                borderRadius: 1.5,
+                backgroundColor: C.kitchen.on,
+                boxShadow: "0 0 8px " + C.kitchen.on,
+                transition: "width 0.8s cubic-bezier(0.4, 0, 0.2, 1)",
+              }} />
+            </div>
+
+            <div style={{
+              fontSize: mob ? 13 : 12,
+              color: C.textFaint,
+              opacity: fadeIn ? 0.8 : 0,
+              transition: "opacity 0.8s ease 0.5s",
+            }}>
+              Wetterdaten werden geladen
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── MAIN DASHBOARD ──────────────────────────────────────────────────
+    function DashboardMain({ history, lastPoll, backendVersion, showBird, onToggleBird }) {
+      const [selDay, setSelDay] = useState(0);
+      const [selSlot, setSelSlot] = useState(getNowSlot());
+      const mob = useIsMobile();
+      const bp = useBreakpoint();
+      const lg = bp === "lg";
+
+      // Empty state
+      if (!history || history.length === 0) {
+        return (
+          <div style={{ minHeight: "100vh", background: "linear-gradient(180deg, #080e1a 0%, #141e30 100%)", color: C.textHi, fontFamily: ff }}>
+            <header style={{ textAlign: "center", padding: "40px 16px 6px" }}>
+              <div style={{ fontSize: 12, letterSpacing: 4, color: C.textLo, textTransform: "uppercase", fontWeight: 500 }}>Mama Wetter</div>
+            </header>
+            <EmptyState />
+          </div>
+        );
+      }
+
+      const day = history[selDay] || history[0];
+      const slot = day.slots[selSlot];
+      const slotName = SLOTS[selSlot];
+
+      const isDay = ["Vormittags", "Mittags", "Nachmittags"].includes(slotName);
+      const bgTopTarget = isDay ? "#1a2a40" : slotName === "Morgens" ? "#10141e" : slotName === "Abends" ? "#0c1018" : "#080e1a";
+      const bgBotTarget = isDay ? "#1e3050" : "#141e30";
+      // JS-interpolierte Farbwerte — CSS transition kann linear-gradient
+      // nicht smooth animieren, deshalb nutzen wir den useAnimatedColor-Hook.
+      const bgTop = useAnimatedColor(bgTopTarget, 1200);
+      const bgBot = useAnimatedColor(bgBotTarget, 1200);
+
+      const handleNow = useCallback(() => {
+        setSelDay(0);
+        setSelSlot(getNowSlot());
+      }, []);
+
+      return (
+        <div style={{
+          minHeight: "100vh",
+          background: "linear-gradient(180deg, "+bgTop+" 0%, "+bgBot+" 100%)",
+          color: C.textHi, fontFamily: ff,
+          padding: 0, margin: 0, overflowX: "hidden",
+          transition: T("1.2s"),
+        }}>
+
+          {/* HEADER */}
+          <header style={{ textAlign: "center", padding: mob ? "20px 12px 6px" : lg ? "40px 16px 12px" : "28px 16px 8px" }}>
+            <div style={{ fontSize: mob ? 11 : lg ? 18 : 12, letterSpacing: mob ? 4 : lg ? 8 : 5, color: C.textLo, textTransform: "uppercase", fontWeight: lg ? 400 : 500 }}>
+              Mama Wetter
+            </div>
+          </header>
+
+          {/* DAY TABS */}
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-end", gap: lg ? 4 : 0, padding: mob ? "6px 4px 6px" : lg ? "8px 16px 16px" : "10px 8px 8px", overflowX: "auto", scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
+            {[{ key: "now", label: "Jetzt" }, ...history.map((d, i) => ({ key: d.date, label: wday(d.date), sub: fmt(d.date), idx: i, problems: dayHasProblems(d) }))].map((item, arrIdx) => {
+              const isNow = item.key === "now";
+              const sel = !isNow && item.idx === selDay;
+              return (
+                <React.Fragment key={item.key}>
+                  <button onClick={() => { if (isNow) { handleNow(); } else { setSelDay(item.idx); setSelSlot(0); } }}
+                    style={{
+                      background: sel ? "rgba(255,255,255,0.05)" : "transparent",
+                      border: "none", borderBottom: sel ? "2px solid "+C.kitchen.on : "2px solid transparent",
+                      borderRadius: "8px 8px 0 0", padding: mob ? "8px 10px 6px" : lg ? "10px 20px 8px" : "8px 14px 6px", cursor: "pointer", flex: "0 0 auto",
+                      textAlign: "center", transition: T("0.3s"),
+                    }}>
+                    <div style={{ fontSize: mob ? 14 : lg ? 15 : 13, color: sel ? C.textHi : C.textLo, fontWeight: sel ? 500 : 400, fontFamily: ff }}>{item.label}</div>
+                    {!isNow && <div style={{ fontSize: mob ? 12 : lg ? 13 : 11, color: sel ? C.textLo : C.textFaint, fontFamily: ff, marginTop: 1 }}>{item.sub}</div>}
+                    {!isNow && item.problems && <div style={{ width: 4, height: 4, borderRadius: "50%", backgroundColor: C.error, margin: "4px auto 0", opacity: 0.7 }} />}
+                  </button>
+                  {isNow && <div style={{ width: 1, height: 20, backgroundColor: "rgba(255,255,255,0.06)", margin: "0 4px", alignSelf: "center" }} />}
+                </React.Fragment>
+              );
+            })}
+          </div>
+
+          {/* ─── TWO-COLUMN WRAPPER (lg: main left, weekly right) ─── */}
+          {(() => {
+            const weeklyGrid = (
+              <div style={{ padding: lg ? "16px 24px" : mob ? "10px 6px 8px" : "14px 16px 8px" }}>
+                <div style={{ fontSize: mob ? 11 : lg ? 13 : 12, color: C.textLo, textTransform: "uppercase", letterSpacing: 3, textAlign: "center", marginBottom: mob ? 12 : lg ? 20 : 16, fontWeight: 500 }}>
+                  Wochenverlauf
+                </div>
+                <div style={{
+                  maxWidth: mob ? "100%" : 420, margin: "0 auto", display: "grid",
+                  gridTemplateColumns: mob ? "54px repeat(6, 1fr)" : lg ? "64px repeat(6, 1fr)" : "60px repeat(6, 1fr)", gap: mob ? "4px 3px" : lg ? "8px 5px" : "5px 4px", alignItems: "center",
+                }}>
+                  <div />
+                  {SLOTS.map(s => (
+                    <div key={s} style={{ fontSize: mob ? 11 : lg ? 12 : 11, color: C.textFaint, textAlign: "center", fontFamily: ff }}>{s.slice(0, 2)}</div>
+                  ))}
+                  {history.map((d, di) => {
+                    const sel = di === selDay;
+                    return [
+                      <div key={"l"+di} style={{ fontSize: mob ? 12 : lg ? 13 : 12, color: sel ? C.textMid : C.textFaint, fontWeight: sel ? 500 : 400, fontFamily: ff, transition: T("0.3s") }}>
+                        {wday(d.date)} {fmt(d.date)}
+                      </div>,
+                      ...d.slots.map((s, si) => (
+                        <div key={di+"-"+si} onClick={() => { setSelDay(di); setSelSlot(si); }}
+                          style={{
+                            cursor: "pointer", display: "flex", justifyContent: "center", padding: mob ? "4px 0" : "3px 0",
+                            borderRadius: 4, background: (di===selDay && si===selSlot) ? "rgba(255,255,255,0.07)" : "transparent",
+                            transition: T("0.2s"),
+                          }}>
+                          <MiniHouse slot={s} date={d.date} slotIdx={si} showBird={showBird} lg={lg} />
+                        </div>
+                      ))
+                    ];
+                  })}
+                </div>
+              </div>
+            );
+
+            const mainContent = (
+              <div style={{ flex: lg ? "1 1 0" : undefined, minWidth: 0 }}>
+                {/* Shared width container — all children share the same left/right edges */}
+                <div style={{ maxWidth: 604, margin: "0 auto", padding: mob ? "0 8px" : "0 12px" }}>
+                {/* HOUSE */}
+                <div style={{ paddingTop: mob ? 4 : 8 }}>
+                  <House slot={slot} slotName={slotName} date={day.date} slotIdx={selSlot} showBird={showBird} />
+                </div>
+
+                {/* LEGEND (Bars-Zeile) */}
+                <div style={{ display: "flex", justifyContent: "center", gap: mob ? 18 : lg ? 32 : 24, padding: mob ? "12px 0 4px" : lg ? "20px 0 6px" : "14px 0 4px" }}>
+                  {[
+                    { color: C.kitchen.on, label: "Küche", value: slot.k },
+                    { color: C.tv.on, label: "Lesezimmer", value: slot.s },
+                    { color: C.door.on, label: "Eingang", value: slot.e },
+                    ...(showBird ? [{ color: C.bird.on, label: "Gesang", value: slot.g }] : []),
+                  ].map((s, i) => {
+                    const on = isOn(s.value); const err = isError(s.value);
+                    const barColor = err ? (isFehler(s.value) ? C.error : C.offline) : s.color;
+                    const opacity = on ? 1 : err ? 0.8 : 0.2;
+                    return (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 7, opacity: opacity, transition: T("0.5s") }}>
+                        <div style={{ width: lg ? 22 : 16, height: lg ? 4 : 3, borderRadius: 2, backgroundColor: barColor, boxShadow: on ? "0 0 6px "+s.color : "none", transition: T("0.5s") }} />
+                        <span style={{ fontSize: mob ? 13 : lg ? 15 : 13, color: C.textMid, fontFamily: ff }}>{s.label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ textAlign: "center", padding: mob ? "4px 0 8px" : lg ? "6px 0 14px" : "4px 0 8px", fontSize: mob ? 12 : lg ? 14 : 12, color: C.textFaint, fontFamily: ff, opacity: 0.8 }}>
+                  Leuchtet, sobald im Zeitfenster etwas aktiv war
+                </div>
+
+                {/* TIME SLOTS (Stacked Bars) */}
+                <div style={{ display: "flex", justifyContent: "space-between", gap: mob ? 3 : "clamp(3px, 0.6vw, 8px)", padding: mob ? "10px 0 8px" : "clamp(10px, 1.5vw, 16px) 0 clamp(8px, 1vw, 12px)" }}>
+                  {SLOTS.map((name, idx) => {
+                    const s = day.slots[idx];
+                    const sel = idx === selSlot;
+                    const nd = noDataCount(s) === 4;
+                    const slotPast = isSlotPast(day.date, idx);
+                    const sensors = [
+                      { v: s.k, c: C.kitchen.on },
+                      { v: s.s, c: C.tv.on },
+                      { v: s.e, c: C.door.on },
+                      ...(showBird ? [{ v: s.g, c: C.bird.on }] : []),
+                    ];
+                    return (
+                      <button key={name} onClick={() => setSelSlot(idx)}
+                        style={{
+                          background: sel ? "rgba(255,255,255,0.06)" : "transparent",
+                          border: sel ? "1px solid rgba(255,255,255,0.1)" : "1px solid transparent",
+                          borderRadius: mob ? 10 : "clamp(10px, 1.2vw, 12px)", padding: mob ? "10px 4px 8px" : "clamp(10px, 1.3vw, 14px) clamp(6px, 1vw, 10px) clamp(8px, 1vw, 12px)", cursor: "pointer", flex: "1 1 0", minWidth: 0, overflow: "hidden", transition: T("0.3s"),
+                        }}>
+                        <div style={{ fontSize: mob ? 13 : "clamp(12px, calc(8px + 0.8vw), 15px)", fontWeight: sel ? 500 : 400, color: sel ? C.textHi : C.textLo, fontFamily: ff, whiteSpace: "nowrap" }}>{SLOT_SHORT[name]}</div>
+                        <div style={{ fontSize: mob ? 12 : "clamp(11px, calc(8px + 0.55vw), 13px)", color: C.textFaint, marginTop: 2, fontFamily: ff, whiteSpace: "nowrap" }}>{SLOT_LABELS[name]}</div>
+                        <div style={{ marginTop: mob ? 6 : "clamp(6px, 0.8vw, 8px)", display: "flex", flexDirection: "column", alignItems: "center", gap: mob ? 2 : "clamp(2px, 0.3vw, 3px)", padding: "0 4px" }}>
+                          {nd && slotPast ? (
+                            <div style={{ width: "100%", maxWidth: mob ? 28 : "clamp(28px, 3.5vw, 36px)", height: mob ? 3 : "clamp(3px, 0.4vw, 4px)", borderRadius: 2, backgroundColor: C.error, opacity: 0.4 }} />
+                          ) : nd && !slotPast ? (
+                            <div style={{ width: "100%", maxWidth: mob ? 28 : "clamp(28px, 3.5vw, 36px)", height: mob ? 3 : "clamp(3px, 0.4vw, 4px)", borderRadius: 2, backgroundColor: C.textFaint, opacity: 0.3 }} />
+                          ) : sensors.map((d, i) => (
+                            <div key={i} style={{
+                              width: "100%", maxWidth: mob ? 28 : "clamp(28px, 3.5vw, 36px)", height: mob ? 3 : "clamp(3px, 0.4vw, 4px)", borderRadius: 2,
+                              backgroundColor: isOn(d.v) ? d.c : isError(d.v) ? C.error : "#1a2030",
+                              boxShadow: isOn(d.v) ? "0 0 6px "+d.c : "none", transition: T("0.3s"),
+                            }} />
+                          ))}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                </div>{/* end shared width container */}
+              </div>
+            );
+
+            return lg ? (
+              <div style={{ display: "flex", gap: 0, padding: "12px 32px 0", maxWidth: 1100, margin: "0 auto", alignItems: "stretch" }}>
+                <div style={{ flex: "1 1 0", minWidth: 0 }}>{mainContent}</div>
+                <div style={{ width: 1, background: "linear-gradient(180deg, transparent, rgba(255,255,255,0.06) 20%, rgba(255,255,255,0.06) 80%, transparent)", margin: "0 28px", flexShrink: 0 }} />
+                <div style={{ flex: "0 0 400px", display: "flex", flexDirection: "column", justifyContent: "center", padding: "24px 0", background: "rgba(255,255,255,0.015)", borderRadius: 16 }}>{weeklyGrid}</div>
+              </div>
+            ) : (
+              <React.Fragment>
+                {mainContent}
+                {/* DIVIDER */}
+                <div style={{ height: 1, margin: "14px 48px", background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent)" }} />
+                {weeklyGrid}
+              </React.Fragment>
+            );
+          })()}
+
+          {/* FOOTER */}
+          <div style={{ textAlign: "center", padding: mob ? "20px 12px 40px" : lg ? "32px 16px 48px" : "28px 16px 40px", color: C.textFaint, fontSize: mob ? 13 : lg ? 13 : 12, letterSpacing: 1, fontFamily: ff }}>
+            74653 &middot; Letzte Messung {timeSince(lastPoll)}
+            <div style={{ fontSize: mob ? 10 : 9, marginTop: 4, opacity: 0.6, letterSpacing: 0.5 }}>
+              Frontend v{FRONTEND_VERSION}{backendVersion ? " · Backend v" + backendVersion : ""}
+            </div>
+            {showBird && <div style={{ marginTop: 12 }}>
+              <button onClick={onToggleBird} style={{
+                background: "none", border: "none", cursor: "pointer",
+                fontSize: mob ? 11 : 10, color: C.textFaint, fontFamily: ff, opacity: 0.4,
+                padding: "4px 8px", transition: T("0.3s"),
+              }}>Erweiterten Modus deaktivieren</button>
+            </div>}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── APP (STATE MANAGER) ────────────────────────────────────────────
+    function App() {
+      const [state, setState] = useState("loading"); // "loading" | "login" | "error" | "ready"
+      const [data, setData] = useState(null);
+      const [lastPoll, setLastPoll] = useState(null);
+      const [backendVersion, setBackendVersion] = useState(null);
+      const [pw, setPw] = useState(() => {
+        const urlPw = new URLSearchParams(window.location.search).get("pw");
+        if (urlPw) { const lc = urlPw.toLowerCase(); localStorage.setItem("wetter_pw", lc); return lc; }
+        return localStorage.getItem("wetter_pw") || "";
+      });
+      const [showBird, setShowBird] = useState(() => {
+        const urlMode = new URLSearchParams(window.location.search).get("mode");
+        if (urlMode === "karsten") { localStorage.setItem("wetter_mode", "karsten"); return true; }
+        return localStorage.getItem("wetter_mode") === "karsten";
+      });
+      const [wrongPw, setWrongPw] = useState(false);
+      const mob = useIsMobile();
+
+      // Besucher-Tracking — feuert nach Login und bei jedem Aufwecken des Tabs (max. 1x / 4h)
+      useEffect(() => {
+        if (state !== "ready") return;
+
+        const COOLDOWN_MS = 4 * 60 * 60 * 1000; // 4 Stunden
+
+        const shouldLog = () => {
+          const last = parseInt(localStorage.getItem("weckrain_last_tracked") || "0", 10);
+          return Date.now() - last > COOLDOWN_MS;
+        };
+
+        const doLog = () => {
+          if (!shouldLog()) return;
+          localStorage.setItem("weckrain_last_tracked", String(Date.now()));
+
+          // ── Geräte-UUID (stabil über Sessions) ──
+          let deviceId = localStorage.getItem("weckrain_device_id");
+          if (!deviceId) {
+            deviceId = typeof crypto !== "undefined" && crypto.randomUUID
+              ? crypto.randomUUID()
+              : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+                  const r = Math.random() * 16 | 0;
+                  return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16);
+                });
+            localStorage.setItem("weckrain_device_id", deviceId);
+          }
+
+          // ── Fingerprint ──
+          const ua = navigator.userAgent || "";
+          const fpRaw = [ua, screen.width, screen.height,
+            window.devicePixelRatio || 1,
+            Intl.DateTimeFormat().resolvedOptions().timeZone,
+            navigator.language,
+            navigator.hardwareConcurrency || 0].join("|");
+          let fpHash = 0;
+          for (let i = 0; i < fpRaw.length; i++) {
+            fpHash = Math.imul(31, fpHash) + fpRaw.charCodeAt(i) | 0;
+          }
+          const fingerprint = Math.abs(fpHash).toString(16).padStart(8, "0");
+
+          // ── Geräteklasse ──
+          const isTablet = /iPad|Android(?!.*Mobile)/i.test(ua);
+          const isMobilePhone = /iPhone|Android.*Mobile|Mobile.*Android/i.test(ua);
+          const deviceType = isTablet ? "Tablet" : isMobilePhone ? "Phone" : "Desktop";
+
+          // ── OS ──
+          let os = "Unknown", osVersion = "";
+          if (/iPhone|iPad/.test(ua)) {
+            os = "iOS"; const m = ua.match(/OS (\d+[_\d]*)/); osVersion = m ? m[1].replace(/_/g, ".") : "";
+          } else if (/Android/.test(ua)) {
+            os = "Android"; const m = ua.match(/Android (\d+[.\d]*)/); osVersion = m ? m[1] : "";
+          } else if (/Windows/.test(ua)) {
+            os = "Windows"; const m = ua.match(/Windows NT (\d+\.\d+)/); osVersion = m ? m[1] : "";
+          } else if (/Mac OS X/.test(ua)) {
+            os = "macOS"; const m = ua.match(/Mac OS X (\d+[_\d]*)/); osVersion = m ? m[1].replace(/_/g, ".") : "";
+          }
+
+          // ── Browser ──
+          let browser = "Unknown", browserVersion = "";
+          if (/CriOS\/(\d+)/.test(ua))        { browser = "Chrome (iOS)"; browserVersion = RegExp.$1; }
+          else if (/Chrome\/(\d+)/.test(ua))  { browser = "Chrome";       browserVersion = RegExp.$1; }
+          else if (/Firefox\/(\d+)/.test(ua)) { browser = "Firefox";      browserVersion = RegExp.$1; }
+          else if (/Version\/(\d+).*Safari/.test(ua)) { browser = "Safari"; browserVersion = RegExp.$1; }
+
+          const mode = localStorage.getItem("wetter_mode") || "normal";
+          const storedPw = localStorage.getItem("wetter_pw") || "";
+
+          // ── Geo-IP + Log-Call (fire-and-forget) ──
+          fetch("https://ipapi.co/json/")
+            .then(r => r.ok ? r.json() : {})
+            .catch(() => ({}))
+            .then(geo => {
+              const p = new URLSearchParams({
+                action: "log", pw: storedPw,
+                device_id: deviceId, fingerprint,
+                device_type: deviceType, os, os_version: osVersion,
+                browser, browser_version: browserVersion,
+                screen_w: screen.width, screen_h: screen.height,
+                dpr: window.devicePixelRatio || 1,
+                city: geo.city || "", region: geo.region || "",
+                country: geo.country_name || "", isp: geo.org || "",
+                mode, app_version: FRONTEND_VERSION,
+                ua_raw: ua.substring(0, 300)
+              });
+              fetch(API_URL + "?" + p.toString()).catch(() => {});
+            });
+        };
+
+        doLog(); // initial beim Laden / Login
+
+        // Tab wieder sichtbar (Ruhemodus aufwecken, Tab-Wechsel)
+        const handleVisibility = () => { if (document.visibilityState === "visible") doLog(); };
+        document.addEventListener("visibilitychange", handleVisibility);
+        return () => document.removeEventListener("visibilitychange", handleVisibility);
+      }, [state]);
+
+      const fetchData = useCallback((password) => {
+        setState("loading");
+        // Show cached data immediately while fetching fresh data
+        const cached = localStorage.getItem("wetter_cache");
+        if (cached) {
+          try {
+            const c = JSON.parse(cached);
+            if (c.history) {
+              setData(c.history);
+              setLastPoll(c.lastPoll || null);
+              setBackendVersion(c.version || null);
+              setState("ready");
+            }
+          } catch(e) {}
+        }
+        fetch(API_URL + "?format=json&pw=" + encodeURIComponent(password))
+          .then(r => {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.json();
+          })
+          .then(json => {
+            if (json && json.history) {
+              setData(json.history);
+              setLastPoll(json.lastPoll || null);
+              setBackendVersion(json.version || null);
+              localStorage.setItem("wetter_pw", password);
+              localStorage.setItem("wetter_cache", JSON.stringify({ history: json.history, lastPoll: json.lastPoll, version: json.version || null }));
+              setPw(password);
+              setWrongPw(false);
+              setState("ready");
+            } else {
+              throw new Error("Invalid data");
+            }
+          })
+          .catch(err => {
+            // If we already showed cached data, don't kick back to login
+            if (state === "ready" && data) return;
+            localStorage.removeItem("wetter_pw");
+            localStorage.removeItem("wetter_cache");
+            setPw("");
+            setWrongPw(true);
+            setState("login");
+          });
+      }, [state, data]);
+
+      useEffect(() => {
+        if (pw) fetchData(pw);
+        else setState("login");
+      }, []);
+
+      // Auto-refresh every 10 minutes
+      useEffect(() => {
+        if (state !== "ready" || !pw) return;
+        const timer = setInterval(() => fetchData(pw), 10 * 60 * 1000);
+        return () => clearInterval(timer);
+      }, [state, pw, fetchData]);
+
+      const handleLogin = useCallback((password) => {
+        if (password.trim()) {
+          fetchData(password.trim().toLowerCase());
+        }
+      }, [fetchData]);
+
+      if (state === "login") return <LoginScreen onSubmit={handleLogin} wrongPw={wrongPw} mob={mob} />;
+      if (state === "loading") return <LoadingScreen mob={mob} />;
+      if (state === "ready" && data) return <DashboardMain history={data} lastPoll={lastPoll} backendVersion={backendVersion} showBird={showBird} onToggleBird={() => { setShowBird(false); localStorage.removeItem("wetter_mode"); const u = new URL(window.location); u.searchParams.delete("mode"); window.history.replaceState({}, "", u); }} />;
+      return <LoadingScreen mob={mob} />;
+    }
+
+    // ─── RENDER ──────────────────────────────────────────────────────────
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
