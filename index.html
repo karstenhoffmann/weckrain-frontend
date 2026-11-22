@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.13.0
+  Version: 1.14.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.13.0";
+    const FRONTEND_VERSION = "1.14.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -1836,14 +1836,14 @@
       return { use3d: mode !== "v1", panel: showBird && mode === "v2" };
     }
 
-    // 3-Monats-Archiv (Vorschau): nur im Karsten-Modus mit ?archiv=1, bleibt per localStorage aktiv.
-    // ?archiv=0 schaltet zurück.
+    // Archiv (Monatsübersicht + Wochen blättern): Standard im Karsten-Modus.
+    // ?archiv=0 schaltet es auf diesem Gerät ab, ?archiv=1 wieder an.
     function archivePreviewOn() {
       try {
         const q = new URLSearchParams(window.location.search).get("archiv");
-        if (q === "1") localStorage.setItem("wetter_archiv", "1");
-        if (q === "0") localStorage.removeItem("wetter_archiv");
-        return localStorage.getItem("wetter_archiv") === "1" && localStorage.getItem("wetter_mode") === "karsten";
+        if (q === "0") localStorage.setItem("wetter_archiv", "0");
+        if (q === "1") localStorage.removeItem("wetter_archiv");
+        return localStorage.getItem("wetter_archiv") !== "0" && localStorage.getItem("wetter_mode") === "karsten";
       } catch (e) { return false; }
     }
 
@@ -1875,6 +1875,7 @@
       return parts.length ? parts.join(" · ") : null;
     }
     // Aktivität eines Tages 0..1: Anteil der Zeitfenster, in denen Küche, Lesezimmer oder Eingang aktiv waren
+    const PHONE_PINK = "#f07ac0";
     const MONTHS_LONG = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
     const dayActivity = (d) => d.slots.filter(s => isOn(s.k) || isOn(s.s) || isOn(s.e)).length / 6;
 
@@ -2043,6 +2044,7 @@
                       const date = ym + "-" + pad(day), i = idxOf[date];
                       const d = i === undefined ? null : allHistory[i];
                       const a = d ? dayActivity(d) : 0, prob = d && dayHasProblems(d);
+                      const phone = d && d.slots.some(sl => isOn(sl.g));
                       const selD = i === selIdx, selW = i !== undefined && Math.floor(i / 7) === wk;
                       cells.push(
                         <div key={day} title={d ? wday(date) + " " + fmt(date) : undefined}
@@ -2051,7 +2053,9 @@
                             display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontFamily: ff,
                             background: !d ? "transparent" : a > 0 ? "rgba(240,196,90," + (0.14 + a * 0.76).toFixed(2) + ")" : prob ? "rgba(194,122,90,0.4)" : "#1a2030",
                             color: !d ? "rgba(94,112,134,0.45)" : a > 0.45 ? "#2a2010" : C.textMid,
-                            border: selD ? "2px solid " + C.textHi : selW ? "1px solid rgba(232,237,245,0.6)" : !d ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
+                            // pink umrandet = Telefon benutzt; Auswahl als Außenlinie, damit beides sichtbar bleibt
+                            border: phone ? "2px solid " + PHONE_PINK : !d ? "1px solid rgba(255,255,255,0.04)" : "none",
+                            outline: selD ? "2px solid " + C.textHi : selW ? "1px solid rgba(232,237,245,0.6)" : "none", outlineOffset: 1 }}>
                           {day}
                         </div>
                       );
@@ -2078,7 +2082,10 @@
                       <div style={{ display: "inline-grid", gridTemplateColumns: "repeat(2, auto)", gap: mob ? 8 : 10, alignItems: "start" }}>
                         {months.map(monthBlock)}
                       </div>
-                      <div style={{ fontSize: 11, color: C.textFaint, marginTop: 10, fontFamily: ff }}>Heller = mehr Zeitfenster mit Aktivität</div>
+                      <div style={{ fontSize: 11, color: C.textFaint, marginTop: 10, fontFamily: ff, lineHeight: 1.6 }}>
+                        Heller = mehr Zeitfenster mit Aktivität<br />
+                        <span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, border: "2px solid " + PHONE_PINK, verticalAlign: -1, marginRight: 5, boxSizing: "border-box" }} />Telefon benutzt
+                      </div>
                     </div>
                   );
                 })()}
