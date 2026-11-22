@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.11.1
+  Version: 1.12.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.11.1";
+    const FRONTEND_VERSION = "1.12.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -1863,7 +1863,7 @@
       return parts.length ? parts.join(" · ") : null;
     }
     // Aktivität eines Tages 0..1: Anteil der Zeitfenster, in denen Küche, Lesezimmer oder Eingang aktiv waren
-    const MONTHS_SHORT = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
+    const MONTHS_LONG = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
     const dayActivity = (d) => d.slots.filter(s => isOn(s.k) || isOn(s.s) || isOn(s.e)).length / 6;
 
     function DashboardMain({ history: allHistory, lastPoll, backendVersion, showBird, onToggleBird }) {
@@ -2012,50 +2012,60 @@
                   })}
                 </div>
                 {archive && (() => {
-                  // Kalender der letzten Wochen: Spalten = Wochen (älteste links), Zeilen = Tage (neuester oben)
-                  const cell = mob ? 13 : 14, gap = 3;
+                  // Monatskalender: ein Block pro Monat (neuester zuerst), Zeilen = Kalenderwochen Mo–So,
+                  // Tageszahl im Feld, Farbe = Aktivität. Tage ohne Daten bleiben leer umrandet.
+                  const cell = mob ? 19 : 20, gap = 3;
+                  const idxOf = {}; allHistory.forEach((d, i) => { idxOf[d.date] = i; });
+                  const selIdx = wk * 7 + selDay;
+                  const months = [];
+                  allHistory.forEach((d) => { const m = d.date.slice(0, 7); if (months.indexOf(m) < 0) months.push(m); });
+                  const pad = (n) => (n < 10 ? "0" : "") + n;
+                  const monthBlock = (ym) => {
+                    const y = +ym.slice(0, 4), m = +ym.slice(5, 7);
+                    const first = new Date(y, m - 1, 1), nDays = new Date(y, m, 0).getDate();
+                    const lead = (first.getDay() + 6) % 7;              // Montag = 0
+                    const cells = [];
+                    for (let k = 0; k < lead; k++) cells.push(<div key={"p" + k} />);
+                    for (let day = 1; day <= nDays; day++) {
+                      const date = ym + "-" + pad(day), i = idxOf[date];
+                      const d = i === undefined ? null : allHistory[i];
+                      const a = d ? dayActivity(d) : 0, prob = d && dayHasProblems(d);
+                      const selD = i === selIdx, selW = i !== undefined && Math.floor(i / 7) === wk;
+                      cells.push(
+                        <div key={day} title={d ? wday(date) + " " + fmt(date) : undefined}
+                          onClick={d ? () => { setWeek(Math.floor(i / 7)); setSelDay(i % 7); } : undefined}
+                          style={{ width: cell, height: cell, borderRadius: 4, boxSizing: "border-box", cursor: d ? "pointer" : "default",
+                            display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontFamily: ff,
+                            background: !d ? "transparent" : a > 0 ? "rgba(240,196,90," + (0.14 + a * 0.76).toFixed(2) + ")" : prob ? "rgba(194,122,90,0.4)" : "#1a2030",
+                            color: !d ? "rgba(94,112,134,0.45)" : a > 0.45 ? "#2a2010" : C.textMid,
+                            border: selD ? "2px solid " + C.textHi : selW ? "1px solid rgba(232,237,245,0.6)" : !d ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
+                          {day}
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={ym} style={{ padding: mob ? "10px 8px 8px" : "10px 10px 8px", background: "rgba(255,255,255,0.025)", borderRadius: 10 }}>
+                        <div style={{ fontSize: mob ? 12 : 13, color: C.textMid, fontFamily: ff, marginBottom: 6, textAlign: "left", paddingLeft: 2 }}>
+                          {MONTHS_LONG[m - 1]} <span style={{ color: C.textFaint }}>{y}</span>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, " + cell + "px)", gap: gap }}>
+                          {["M", "D", "M", "D", "F", "S", "S"].map((l, k) => (
+                            <div key={"h" + k} style={{ fontSize: 9, color: C.textFaint, textAlign: "center", fontFamily: ff }}>{l}</div>
+                          ))}
+                          {cells}
+                        </div>
+                      </div>
+                    );
+                  };
                   return (
                     <div style={{ marginTop: mob ? 18 : 24, textAlign: "center" }}>
-                      <div style={{ fontSize: mob ? 11 : 12, color: C.textFaint, textTransform: "uppercase", letterSpacing: 2, marginBottom: 10 }}>
-                        Letzte {nWeeks > 4 ? Math.round(allHistory.length / 30) + " Monate" : nWeeks + " Wochen"}
+                      <div style={{ fontSize: mob ? 11 : 12, color: C.textFaint, textTransform: "uppercase", letterSpacing: 2, marginBottom: 12 }}>
+                        Letzte {Math.round(allHistory.length / 30)} Monate
                       </div>
-                      <div style={{ display: "inline-flex", gap: 1, alignItems: "flex-end" }}>
-                        <div style={{ display: "flex", flexDirection: "column", gap: gap, padding: "3px 4px 3px 0" }}>
-                          {Array.from({ length: 7 }, (_, r) => (
-                            <div key={r} style={{ height: cell, lineHeight: cell + "px", fontSize: 9, color: C.textFaint, textAlign: "right", fontFamily: ff }}>
-                              {r % 2 === 0 && allHistory[r] ? wday(allHistory[r].date) : ""}
-                            </div>
-                          ))}
-                        </div>
-                        {Array.from({ length: nWeeks }, (_, c) => {
-                          const w = nWeeks - 1 - c, selW = w === wk;
-                          // Monatsname, sobald der neueste Tag der Spalte in einem neuen Monat liegt (erste Spalte immer)
-                          const cur = allHistory[w * 7];
-                          const newMon = (cc) => { const ww = nWeeks - 1 - cc, a = allHistory[ww * 7], b = allHistory[(ww + 1) * 7]; return a && b && a.date.slice(5, 7) !== b.date.slice(5, 7); };
-                          // erste Spalte nur beschriften, wenn die zweite nicht schon einen neuen Monat zeigt
-                          const mon = cur && (c === 0 ? !newMon(1) : newMon(c)) ? MONTHS_SHORT[+cur.date.slice(5, 7) - 1] : "";
-                          return (
-                            <div key={c} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                              <div style={{ height: 14, fontSize: 9, color: C.textFaint, whiteSpace: "nowrap", fontFamily: ff, width: cell + 6, textAlign: "left", overflow: "visible" }}>{mon}</div>
-                              <div onClick={() => { setWeek(w); setSelDay(0); }} style={{ display: "flex", flexDirection: "column", gap: gap, padding: 2, borderRadius: 5, cursor: "pointer",
-                                border: "1px solid " + (selW ? "rgba(232,237,245,0.45)" : "transparent"), transition: T("0.2s") }}>
-                                {Array.from({ length: 7 }, (_, r) => {
-                                  const d = allHistory[w * 7 + r];
-                                  if (!d) return <div key={r} style={{ width: cell, height: cell }} />;
-                                  const a = dayActivity(d), selD = selW && r === selDay, prob = dayHasProblems(d);
-                                  return (
-                                    <div key={r} title={wday(d.date) + " " + fmt(d.date)} onClick={(e) => { e.stopPropagation(); setWeek(w); setSelDay(r); }}
-                                      style={{ width: cell, height: cell, borderRadius: 3, boxSizing: "border-box",
-                                        background: a > 0 ? "rgba(240,196,90," + (0.12 + a * 0.78).toFixed(2) + ")" : prob ? "rgba(194,122,90,0.35)" : "#1a2030",
-                                        border: selD ? "1.5px solid " + C.textHi : "none" }} />
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          );
-                        })}
+                      <div style={{ display: "inline-grid", gridTemplateColumns: "repeat(2, auto)", gap: mob ? 8 : 10, alignItems: "start" }}>
+                        {months.map(monthBlock)}
                       </div>
-                      <div style={{ fontSize: 11, color: C.textFaint, marginTop: 8, fontFamily: ff }}>Heller = mehr Zeitfenster mit Aktivität</div>
+                      <div style={{ fontSize: 11, color: C.textFaint, marginTop: 10, fontFamily: ff }}>Heller = mehr Zeitfenster mit Aktivität</div>
                     </div>
                   );
                 })()}
