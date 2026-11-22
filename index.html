@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.3.0
+  Version: 1.4.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.3.0";
+    const FRONTEND_VERSION = "1.4.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -275,51 +275,61 @@
 
     // ─── HOUSE COMPONENT ─────────────────────────────────────────────────
     // ─── REH v2 — RIG MIT GELENKEN ───────────────────────────────────────
-    // Gleiche Formen und Farben wie das bisherige Reh, aber zerlegt in
-    // Körperteile mit eigenen Drehpunkten. Eine kleine Animations-Engine
+    // Gleiche Formen und Farben wie das bisherige Reh, zerlegt in Körperteile
+    // mit eigenen Drehpunkten. Eine kleine Animations-Engine
     // (requestAnimationFrame, schreibt direkt ins SVG, kein React-Rerender)
-    // gleitet weich zwischen Posen und überlagert Kleinigkeiten wie Blinzeln,
-    // Ohrenzucken, Wedeln und Atmen.
+    // gleitet weich zwischen Posen und überlagert Blinzeln, Ohrenzucken,
+    // Wedeln, Atmen, Kauen und den Laufzyklus.
     //
-    // Koordinaten: Reh-lokal, Boden (Hufe) bei y=15, Kopf zeigt nach +x.
-    // Gelenk-Winkel in Grad, positiv = im Uhrzeigersinn (SVG).
-    //   Beine:  *H = Hüfte/Schulter (positiv = Bein schwingt nach hinten),
-    //           *K = Knie relativ zum Oberschenkel
-    //   neck:   Hals um (11,-3), positiv = Kopf geht nach unten (Grasen)
-    //   head:   Kopf um Schädelbasis (16,-13)
+    // Koordinaten: Reh-lokal, Hufe bei y=15, Kopf zeigt nach +x.
+    // Das ganze Reh steht in einer Gruppe translate(x, y) scale(face·S, S):
+    // face = +1 schaut nach rechts, -1 nach links (Wende = weiches Umklappen).
+    // Gelenk-Winkel in Grad, positiv = im Uhrzeigersinn (SVG):
+    //   *H Hüfte/Schulter (positiv = Bein schwingt nach hinten), *K Knie
+    //   neck: Hals um (11,-3), positiv = Kopf nach unten
+    //   head: Kopf um (16,-13)
+    //   turn: Kopfdrehung, +1 Profil nach vorn, 0 frontal (schaut den
+    //         Betrachter an), -1 Profil nach hinten
 
+    const DEER_SCALE = 1.15;
+    const DEER_GROUND_Y = 308;          // Hufe in Szenen-Koordinaten
+    const DEER_HOME_X = 65;
+    const DEER_RANGE = [40, 160];       // Rasen links vor dem Haus
     const DEER_BASE = {
-      bodyY: 0, pitch: 0, neck: 0, head: 0,
+      bodyY: 0, pitch: 0, neck: 0, head: 0, turn: 1,
       fH1: 0, fK1: 0, fH2: 0, fK2: 0, hH1: 0, hK1: 0, hH2: 0, hK2: 0,
       earL: 0, earR: 3, tail: 0, eyes: 0,
     };
+    const DEER_LIE_LEGS = { fH1: 75, fK1: -155, fH2: 70, fK2: -150, hH1: -80, hK1: 155, hH2: -75, hK2: 150 };
     const DEER_POSES = {
       stand: {},
       graze: { neck: 65, fH1: -3, fH2: 4 },
       alert: { neck: -12, head: -6, earL: -10, earR: -8 },
       sniff: { pitch: 3, neck: 50, head: -28, earL: -6, earR: -2, fH1: -4 },
-      lie:   { bodyY: 10, neck: 6, head: -4, fH1: 75, fK1: -155, fH2: 70, fK2: -150, hH1: -80, hK1: 155, hH2: -75, hK2: 150 },
-      sleep: { bodyY: 10, neck: 48, head: -10, fH1: 75, fK1: -155, fH2: 70, fK2: -150, hH1: -80, hK1: 155, hH2: -75, hK2: 150, earL: 18, earR: 22, eyes: 1 },
+      lie:   Object.assign({ bodyY: 10, neck: 6, head: -4 }, DEER_LIE_LEGS),
+      sleep: Object.assign({ bodyY: 10, neck: 48, head: -10, earL: 18, earR: 22, eyes: 1 }, DEER_LIE_LEGS),
     };
-    // Reaktionszeit pro Gelenk (Sekunden). Unterschiedliche Werte ergeben
-    // natürliches Nachschwingen: Beine zuerst, Körper, Kopf zuletzt.
     const DEER_TAU = {
-      bodyY: 0.45, pitch: 0.4, neck: 0.55, head: 0.5,
-      fH1: 0.22, fK1: 0.22, fH2: 0.26, fK2: 0.26, hH1: 0.24, hK1: 0.24, hH2: 0.28, hK2: 0.28,
+      bodyY: 0.45, pitch: 0.4, neck: 0.5, head: 0.45, turn: 0.32,
+      fH1: 0.2, fK1: 0.2, fH2: 0.24, fK2: 0.24, hH1: 0.22, hK1: 0.22, hH2: 0.26, hK2: 0.26,
       earL: 0.18, earR: 0.2, tail: 0.15, eyes: 0.35,
     };
-    // Aktionen des Zufalls-Verhaltens: [Pose, Dauer min, max (s), Gewicht]
+    // Zufalls-Verhalten: [Pose, Dauer min, max (s), Gewicht]
     const DEER_ACTIONS = {
-      idle:  ["stand", 4, 9, 3],
-      graze: ["graze", 7, 14, 3],
-      look:  ["alert", 3, 6, 2],
-      sniff: ["sniff", 3, 5, 2],
-      rest:  ["lie", 25, 50, 0.6],
+      idle:     ["stand", 3, 6, 1.5],
+      graze:    ["graze", 6, 12, 2.5],
+      look:     ["stand", 7, 7, 1.6],    // Sequenz: hoch, zum Betrachter, nach hinten, nach vorn
+      viewer:   ["stand", 3.5, 5, 1.2],  // schaut den Betrachter an
+      back:     ["stand", 3, 4.5, 1],    // schaut über die Schulter
+      sniff:    ["sniff", 3, 5, 1.4],
+      walk:     ["stand", 20, 20, 2.6],  // endet, wenn das Ziel erreicht ist
+      rest:     ["lie", 25, 45, 0.5],
     };
+    const DEER_LOOK_SEQ = [[0, "pt", 70, -75], [1.6, "viewer"], [3.4, "pt", -60, -45], [5.2, "pt", 75, -30]];
 
-    const lerpPose = (name) => Object.assign({}, DEER_BASE, DEER_POSES[name] || {});
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
     const rnd = (a, b) => a + Math.random() * (b - a);
+    const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 
     // Vorwärts-Kinematik: Punkt im Kopf-Koordinatensystem → Reh-lokal
     function deerHeadPoint(p, x, y) {
@@ -352,58 +362,67 @@
       useEffect(() => {
         const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
         const st = {
-          cur: lerpPose(sleeping ? "sleep" : "stand"),
-          action: sleeping ? "sleep" : "idle", actionEnd: 0, look: null,
+          cur: Object.assign({}, DEER_BASE, DEER_POSES[sleeping ? "sleep" : "stand"]),
+          x: DEER_HOME_X, face: 1, faceT: 1, destX: null, walkPh: 0, walkAmt: 0,
+          action: sleeping ? "sleep" : "idle", actionStart: 0, actionEnd: 0, look: null,
           imp: { earL: [], earR: [], tail: [], head: [] },
           nextEar: 0, nextTail: 0, nextBlink: 0, blinkT: -1,
           bf: null, nextBf: 0, forced: null, t0: performance.now(), last: performance.now(),
           sleeping, isDayish,
         };
         R.current.st = st;
-
         const now = () => (performance.now() - st.t0) / 1000;
+
+        // Umrechnung Szene ↔ Reh-lokal (ohne Wende-Animation, mit Blickrichtung)
+        const toLocal = (wx, wy) => [(wx - st.x) / (DEER_SCALE * st.faceT), (wy - (DEER_GROUND_Y - 15 * DEER_SCALE)) / DEER_SCALE];
+        const toWorld = (lx, ly) => [st.x + lx * DEER_SCALE * st.face, DEER_GROUND_Y - 15 * DEER_SCALE + ly * DEER_SCALE];
+
+        const setAction = (k, t, dur) => {
+          st.action = k; st.actionStart = t;
+          const a = DEER_ACTIONS[k];
+          st.actionEnd = t + (dur || (a ? rnd(a[1], a[2]) : 6));
+          st.look = null; st.destX = null;
+          if (k === "walk") {
+            let d = rnd(DEER_RANGE[0], DEER_RANGE[1]);
+            if (Math.abs(d - st.x) < 30) d = st.x < (DEER_RANGE[0] + DEER_RANGE[1]) / 2 ? st.x + rnd(35, 70) : st.x - rnd(35, 70);
+            st.destX = clamp(d, DEER_RANGE[0], DEER_RANGE[1]);
+          }
+          if (k === "back") st.look = { pt: [-55, rnd(-55, -30)] };
+          if (k === "viewer") st.look = { viewer: true };
+        };
         const pickAction = (t) => {
           const keys = Object.keys(DEER_ACTIONS);
           const total = keys.reduce((s, k) => s + DEER_ACTIONS[k][3], 0);
           let r = Math.random() * total, k = keys[0];
           for (const kk of keys) { r -= DEER_ACTIONS[kk][3]; if (r <= 0) { k = kk; break; } }
-          if (k === st.action && k !== "idle") k = "idle";
+          if (k === st.action) k = k === "idle" ? "graze" : "idle";
           setAction(k, t);
-        };
-        const setAction = (k, t, dur) => {
-          st.action = k;
-          const a = DEER_ACTIONS[k];
-          st.actionEnd = t + (dur || (a ? rnd(a[1], a[2]) : 6));
-          st.look = k === "look" ? [rnd(25, 90), rnd(-70, -35)] : null;
         };
         const impulse = (ch, amp, freq, decay) => st.imp[ch].push({ t: now(), amp, freq, decay });
         const impVal = (ch, t) => {
           let v = 0;
           st.imp[ch] = st.imp[ch].filter((i) => t - i.t < 3);
-          for (const i of st.imp[ch]) {
-            const a = t - i.t;
-            v += i.amp * Math.exp(-a * i.decay) * Math.sin(a * i.freq);
-          }
+          for (const i of st.imp[ch]) { const a = t - i.t; v += i.amp * Math.exp(-a * i.decay) * Math.sin(a * i.freq); }
           return v;
         };
 
-        // Schmetterling: fliegt heran, umkreist das Reh, landet kurz auf der Nase
+        // Schmetterling in Szenen-Koordinaten; Wegpunkte relativ zum Reh
+        const BF_WP = [[70, -60], [30, -48], [-30, -42], [-10, -62], [22, -30]];
         const startButterfly = (t) => {
-          st.bf = { x: 150, y: -70, vx: 0, vy: 0, phase: "in", tPhase: t, wp: 0, landed: false };
+          const [wx, wy] = toWorld(110, -80);
+          st.bf = { x: wx, y: wy, vx: 0, vy: 0, phase: "in", tPhase: t, wp: 0 };
+          setAction("idle", t, 40);
         };
-        const BF_WAYPOINTS = [[95, -55], [55, -40], [20, -55], [45, -28]];
 
-        // API für die Vorschau-Steuerung
         window.__deerApi = {
           trigger: (name) => {
             const t = now();
             st.forced = null;
-            if (name === "butterfly") { startButterfly(t); setAction("idle", t, 30); return; }
+            if (name === "butterfly") { startButterfly(t); return; }
             if (name === "sleep") { st.forced = "sleep"; return; }
-            if (name === "auto") { setAction("idle", t, 2); return; }
-            setAction(name, t, name === "rest" ? 30 : 10);
+            if (name === "auto") { setAction("idle", t, 1.5); return; }
+            setAction(name, t, name === "rest" ? 30 : name === "walk" ? 20 : name === "look" ? 7 : 8);
           },
-          state: () => ({ action: st.forced || st.action }),
         };
 
         let raf;
@@ -413,84 +432,115 @@
           const dt = Math.min((pnow - st.last) / 1000, 0.1);
           st.last = pnow;
           const t = now();
+          const asleep = st.sleeping || st.forced === "sleep";
 
           // ── Verhalten ──
-          const asleep = st.sleeping || st.forced === "sleep";
-          if (!asleep && !reduce && t > st.actionEnd) pickAction(t);
+          if (!asleep && !reduce && !st.bf && t > st.actionEnd) pickAction(t);
           if (!asleep && !reduce && st.isDayish && !st.bf && t > st.nextBf) {
             if (st.nextBf > 0) startButterfly(t);
-            st.nextBf = t + rnd(70, 150);
+            st.nextBf = t + rnd(60, 130);
           }
-
           let poseName = asleep ? "sleep" : (DEER_ACTIONS[st.action] || ["stand"])[0];
           if (reduce && !asleep) poseName = "stand";
-          const target = lerpPose(poseName);
+          const target = Object.assign({}, DEER_BASE, DEER_POSES[poseName]);
+
+          // Umschau-Sequenz
+          if (st.action === "look" && !asleep) {
+            const lt = t - st.actionStart;
+            let step = DEER_LOOK_SEQ[0];
+            for (const s of DEER_LOOK_SEQ) if (lt >= s[0]) step = s;
+            st.look = step[1] === "viewer" ? { viewer: true } : { pt: [step[2], step[3]] };
+          }
+
+          // Spazieren: erst umdrehen, dann gehen
+          let moving = false;
+          if (st.action === "walk" && st.destX !== null && !asleep) {
+            const dir = Math.sign(st.destX - st.x) || st.face;
+            st.face = dir;
+            if (Math.abs(st.faceT - dir) < 0.15) {
+              const dist = Math.abs(st.destX - st.x);
+              const speed = 11 * smooth(0, 8, dist);
+              st.x += dir * Math.min(speed * dt, dist);
+              moving = dist > 0.4;
+              if (!moving) { st.destX = null; st.actionEnd = Math.min(st.actionEnd, t + rnd(0.8, 2)); }
+            }
+          }
+          st.walkAmt += ((moving ? 1 : 0) - st.walkAmt) * (1 - Math.exp(-dt / 0.25));
+          st.faceT += (st.face - st.faceT) * (1 - Math.exp(-dt / 0.22));
 
           // Schmetterling bewegen
           const bf = st.bf;
           if (bf) {
-            const nose = deerHeadPoint(st.cur, 29.5, -12.8);
+            const noseL = deerHeadPoint(st.cur, 29.5, -12.8);
+            const nose = toWorld(st.cur.turn > 0.5 ? noseL[0] : 20, st.cur.turn > 0.5 ? noseL[1] - 3 : -16);
             let tx, ty;
             if (bf.phase === "in") {
-              [tx, ty] = BF_WAYPOINTS[bf.wp];
-              if (Math.hypot(tx - bf.x, ty - bf.y) < 6) {
-                bf.wp++;
-                if (bf.wp >= BF_WAYPOINTS.length) { bf.phase = "land"; bf.tPhase = t; }
-              }
-            } else if (bf.phase === "land") {
-              [tx, ty] = [nose[0], nose[1] - 2];
-              if (Math.hypot(tx - bf.x, ty - bf.y) < 1.2) {
+              [tx, ty] = toWorld(BF_WP[bf.wp][0], BF_WP[bf.wp][1]);
+              if (Math.hypot(tx - bf.x, ty - bf.y) < 7) { bf.wp++; if (bf.wp >= BF_WP.length) { bf.phase = "land"; bf.tPhase = t; } }
+            } else if (bf.phase === "land" || bf.phase === "sit") {
+              [tx, ty] = [nose[0], nose[1] - 3];
+              if (bf.phase === "land" && Math.hypot(tx - bf.x, ty - bf.y) < 1.5) {
                 bf.phase = "sit"; bf.tPhase = t;
                 impulse("earL", -18, 26, 4); impulse("earR", -14, 24, 4);
               }
-            } else if (bf.phase === "sit") {
-              [tx, ty] = [nose[0], nose[1] - 2];
-              if (t - bf.tPhase > 3.5) {
-                bf.phase = "out"; bf.tPhase = t;
-                impulse("head", 6, 22, 3);
-              }
+              if (bf.phase === "sit" && t - bf.tPhase > 4) { bf.phase = "out"; bf.tPhase = t; impulse("head", 7, 22, 3); }
             } else {
-              [tx, ty] = [-90, -110];
-              if (bf.x < -80) st.bf = null;
+              [tx, ty] = [-40, 150];
+              if (bf.x < -30) { st.bf = null; st.actionEnd = Math.min(st.actionEnd, t + 2); }
             }
             if (st.bf) {
               if (bf.phase === "sit") { bf.x = tx; bf.y = ty; }
               else {
-                const speed = bf.phase === "land" ? 14 : 26;
+                const speed = bf.phase === "land" ? 18 : 30;
                 const dx = tx - bf.x, dy = ty - bf.y, d = Math.hypot(dx, dy) || 1;
                 bf.vx += ((dx / d) * speed - bf.vx) * Math.min(dt * 2.2, 1);
                 bf.vy += ((dy / d) * speed - bf.vy) * Math.min(dt * 2.2, 1);
-                bf.x += bf.vx * dt + Math.sin(t * 5.3) * 0.25;
-                bf.y += bf.vy * dt + Math.sin(t * 7.1) * 0.35;
+                bf.x += bf.vx * dt + Math.sin(t * 5.3) * 0.3;
+                bf.y += bf.vy * dt + Math.sin(t * 7.1) * 0.45;
               }
-              if (!asleep && bf.phase !== "out") st.look = [bf.x, bf.y];
-              else if (bf.phase === "out" && t - bf.tPhase < 1.6) st.look = [bf.x, bf.y];
-              else if (bf.phase === "out") st.look = null;
+              if (!asleep && (bf.phase !== "out" || t - bf.tPhase < 1.4)) {
+                const [lx, ly] = toLocal(bf.x, bf.y);
+                st.look = { pt: [lx, ly] };
+              } else if (bf.phase === "out") st.look = null;
             }
           }
 
-          // Blickziel → Hals + Kopf
-          if (st.look && !asleep) {
-            const nx = 11, ny = -3 + st.cur.bodyY;
-            const phi = Math.atan2(st.look[1] - ny, st.look[0] - nx) * 180 / Math.PI;
-            let r = phi + 27.7;
-            if (st.look[0] < nx - 4) r = clamp(r, -40, 20);
-            const neck = clamp(r * 0.62, -32, 70);
-            target.neck = neck + (poseName === "lie" ? 0 : 0);
-            target.head = clamp(r - neck, -26, 24);
+          // Blickziel → Hals, Kopf, Kopfdrehung
+          if (st.look && !asleep && !reduce) {
             target.earL = Math.min(target.earL, -6); target.earR = Math.min(target.earR, -4);
+            if (st.look.viewer) {
+              target.turn = 0; target.neck = -8; target.head = Math.sin(t * 0.9) * 4;
+            } else {
+              const nx = 11, ny = -3 + st.cur.bodyY;
+              const [lx, ly] = st.look.pt;
+              if (lx >= nx - 6) {
+                const phi = Math.atan2(ly - ny, lx - nx) * 180 / Math.PI;
+                const r = phi + 27.7;
+                target.neck = clamp(r * 0.62, -32, 70);
+                target.head = clamp(r - target.neck, -26, 24);
+                target.turn = 1;
+              } else {
+                // nach hinten: Hals zurückbiegen, Kopf gespiegelt
+                const phi = Math.atan2(ly - ny, nx - lx) * 180 / Math.PI; // Winkel nach hinten
+                // Gespiegelter Kopf: Hals+Kopf zusammen bestimmen die Blickrichtung.
+                // Summe ≈ 0 → Schnauze waagerecht nach hinten; positiv → nach oben.
+                target.neck = -40;
+                target.head = 40 + 12 + clamp(-phi * 0.5, -20, 20);
+                target.turn = -1;
+              }
+            }
           }
 
-          // Kleine Zufälligkeiten (Ohren, Wedel, Blinzeln)
+          // Kleine Zufälligkeiten
           if (!reduce) {
             if (t > st.nextEar) {
               if (st.nextEar > 0 && !asleep) Math.random() < 0.5 ? impulse("earL", -16, 28, 5) : impulse("earR", -14, 26, 5);
               if (st.nextEar > 0 && asleep && Math.random() < 0.3) impulse("earR", -8, 22, 4);
-              st.nextEar = t + rnd(2.5, 8);
+              st.nextEar = t + rnd(2.5, 7);
             }
             if (t > st.nextTail) {
               if (st.nextTail > 0 && !asleep) impulse("tail", -22, 30, 4);
-              st.nextTail = t + rnd(3, 10);
+              st.nextTail = t + rnd(3, 9);
             }
           }
           if (!asleep && t > st.nextBlink) {
@@ -505,11 +555,23 @@
             c[k] += (target[k] - c[k]) * (1 - Math.exp(-dt / tau));
           }
 
+          // Laufzyklus (diagonale Beinpaare), Kopfnicken, Körper-Wippen
+          const w = st.walkAmt;
+          st.walkPh += dt * 2 * Math.PI * 1.7 * w;
+          const ph = st.walkPh;
+          const swing = (p) => 22 * Math.sin(p) * w;
+          const lift = (p) => Math.max(0, Math.cos(p)) * w;
+          const legF1 = [c.fH1 + swing(ph), c.fK1 + 28 * lift(ph)];
+          const legF2 = [c.fH2 + swing(ph + Math.PI), c.fK2 + 28 * lift(ph + Math.PI)];
+          const legH1 = [c.hH1 + swing(ph + Math.PI), c.hK1 - 24 * lift(ph + Math.PI)];
+          const legH2 = [c.hH2 + swing(ph), c.hK2 - 24 * lift(ph)];
+          const bob = Math.abs(Math.sin(ph)) * 0.7 * w;
+
           // Überlagerungen
           const chew = st.action === "graze" && !asleep && c.neck > 50 ? Math.sin(t * 5.2) * 1.6 + Math.sin(t * 1.3) * 1.2 : 0;
           const snf = st.action === "sniff" && !asleep ? Math.max(0, Math.sin(t * 1.7)) * Math.sin(t * 19) * 1.4 : 0;
           const breathe = Math.sin(t * (asleep ? 1.6 : 2.2));
-          const neck = c.neck + chew;
+          const neck = c.neck + chew + Math.sin(ph * 2) * 3 * w;
           const head = c.head + snf + impVal("head", t);
           const earL = c.earL + impVal("earL", t);
           const earR = c.earR + impVal("earR", t);
@@ -519,29 +581,42 @@
 
           // ── In SVG schreiben ──
           const E = R.current, set = (k, v) => { if (E[k]) E[k].setAttribute("transform", v); };
-          set("body", `translate(0, ${c.bodyY.toFixed(2)}) rotate(${c.pitch.toFixed(2)}, -2, -3)`);
+          const op = (k, v) => { if (E[k]) E[k].setAttribute("opacity", clamp(v, 0, 1).toFixed(3)); };
+          const fs = Math.abs(st.faceT) < 0.02 ? 0.02 * (st.faceT < 0 ? -1 : 1) : st.faceT;
+          set("root", `translate(${st.x.toFixed(2)}, ${(DEER_GROUND_Y - 15 * DEER_SCALE).toFixed(2)}) scale(${(fs * DEER_SCALE).toFixed(3)}, ${DEER_SCALE})`);
+          set("body", `translate(0, ${(c.bodyY - bob).toFixed(2)}) rotate(${c.pitch.toFixed(2)}, -2, -3)`);
           set("breath", `translate(-2, -3) scale(1, ${(1 + breathe * (asleep ? 0.022 : 0.012)).toFixed(4)}) translate(2, 3)`);
           set("neck", `rotate(${neck.toFixed(2)}, 11, -3)`);
           set("head", `rotate(${head.toFixed(2)}, 16, -13)`);
+          // Kopfdrehung: Profil schmaler, Frontansicht breiter (und umgekehrt)
+          const tr = c.turn, at = Math.abs(tr);
+          const ps = (tr < 0 ? -1 : 1) * Math.max(at, 0.02);
+          set("headP", `translate(19, 0) scale(${ps.toFixed(3)}, 1) translate(-19, 0)`);
+          op("headP", smooth(0.08, 0.32, at));
+          set("headF", `translate(19, 0) scale(${Math.max(1 - at, 0.02).toFixed(3)}, 1) translate(-19, 0)`);
+          op("headF", smooth(0.08, 0.32, 1 - at));
           set("earL", `translate(17, -24) rotate(${earL.toFixed(2)})`);
           set("earR", `translate(19, -22) rotate(${earR.toFixed(2)})`);
+          set("earFL", `translate(15.2, -21.5) rotate(${(-38 + earL * 0.8).toFixed(2)})`);
+          set("earFR", `translate(22.8, -21.5) rotate(${(38 - earR * 0.8).toFixed(2)})`);
           set("tail", `translate(-17, -6.8) rotate(${tail.toFixed(2)})`);
-          const legs = [["hl1", "hk1", -12.7, c.hH1, c.hK1], ["hl2", "hk2", -8.2, c.hH2, c.hK2], ["fl1", "fk1", 7.3, c.fH1, c.fK1], ["fl2", "fk2", 11.8, c.fH2, c.fK2]];
-          for (const [l, k, x, h, kn] of legs) {
-            set(l, `translate(${x}, ${(2 + c.bodyY).toFixed(2)}) rotate(${h.toFixed(2)})`);
+          const legs = [["hl1", "hk1", -12.7, legH1], ["hl2", "hk2", -8.2, legH2], ["fl1", "fk1", 7.3, legF1], ["fl2", "fk2", 11.8, legF2]];
+          for (const [l, k, x, [h, kn]] of legs) {
+            set(l, `translate(${x}, ${(2 + c.bodyY - bob).toFixed(2)}) rotate(${h.toFixed(2)})`);
             set(k, `translate(0, 6.5) rotate(${kn.toFixed(2)})`);
           }
-          if (E.eyeOpen) E.eyeOpen.setAttribute("opacity", (1 - eyesClosed).toFixed(3));
-          if (E.eyeClosed) E.eyeClosed.setAttribute("opacity", eyesClosed.toFixed(3));
-          if (E.zzz) E.zzz.setAttribute("opacity", clamp((c.eyes - 0.6) / 0.4, 0, 1).toFixed(3));
-          if (E.shadow) E.shadow.setAttribute("opacity", (0.28 - clamp(c.bodyY / 10, 0, 1) * 0.1).toFixed(3));
+          op("eyeOpen", 1 - eyesClosed); op("eyeClosed", eyesClosed);
+          op("eyeOpenF", 1 - eyesClosed); op("eyeClosedF", eyesClosed);
+          op("zzz", (c.eyes - 0.6) / 0.4);
+          if (E.zzz) E.zzz.setAttribute("transform", fs < 0 ? "translate(70, 0) scale(-1, 1)" : "");
+          op("shadow", 0.28 - clamp(c.bodyY / 10, 0, 1) * 0.1);
           if (E.bf) {
             if (st.bf) {
-              const flap = st.bf.phase === "sit" ? 0.55 + 0.45 * Math.cos(t * 2.2) : Math.abs(Math.cos(t * 26));
+              const flap = st.bf.phase === "sit" ? 0.55 + 0.45 * Math.cos(t * 2.2) : Math.abs(Math.cos(t * 24));
               const dir = st.bf.vx < -0.5 ? -1 : 1;
-              E.bf.setAttribute("transform", `translate(${st.bf.x.toFixed(2)}, ${st.bf.y.toFixed(2)}) scale(${dir}, 1)`);
+              E.bf.setAttribute("transform", `translate(${st.bf.x.toFixed(2)}, ${st.bf.y.toFixed(2)}) scale(${2.2 * dir}, 2.2)`);
               E.bf.setAttribute("opacity", "1");
-              if (E.bfWings) E.bfWings.setAttribute("transform", `scale(${Math.max(flap, 0.15).toFixed(3)}, 1)`);
+              if (E.bfWings) E.bfWings.setAttribute("transform", `scale(${Math.max(flap, 0.12).toFixed(3)}, 1)`);
             } else E.bf.setAttribute("opacity", "0");
           }
         };
@@ -549,7 +624,6 @@
         return () => { cancelAnimationFrame(raf); if (window.__deerApi) delete window.__deerApi; };
       }, []);
 
-      // Props-Änderungen (Slot-Wechsel) an die laufende Engine weitergeben
       useEffect(() => {
         const st = R.current.st;
         if (!st) return;
@@ -564,75 +638,111 @@
           <animate attributeName="opacity" values="0; 0.85; 0.8; 0" keyTimes="0; 0.14; 0.76; 1" dur={dur} begin={begin} repeatCount="indefinite" />
         </text>
       );
+      const BR = "#a6724a";
 
       return (
-        <g transform="translate(65, 293)" style={{ filter, transition: "filter 1.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
-          <ellipse ref={ref("shadow")} cx="-2" cy="15" rx="19" ry="2.2" fill="#000" opacity="0.28" />
+        <g style={{ filter, transition: "filter 1.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
+          <g data-deer="root" ref={ref("root")} transform={`translate(${DEER_HOME_X}, ${DEER_GROUND_Y - 15 * DEER_SCALE}) scale(${DEER_SCALE})`}>
+            <ellipse ref={ref("shadow")} cx="-2" cy="15" rx="19" ry="2.2" fill="#000" opacity="0.28" />
 
-          {/* Beine hinter dem Körper: ferne Beine minimal dunkler für Tiefe */}
-          <DeerLeg legRef={ref("hl2")} kneeRef={ref("hk2")} x={-8.2} color="#7d5036" />
-          <DeerLeg legRef={ref("fl2")} kneeRef={ref("fk2")} x={11.8} color="#7d5036" />
-          <DeerLeg legRef={ref("hl1")} kneeRef={ref("hk1")} x={-12.7} color="#8b5a3c" />
-          <DeerLeg legRef={ref("fl1")} kneeRef={ref("fk1")} x={7.3} color="#8b5a3c" />
+            <DeerLeg legRef={ref("hl2")} kneeRef={ref("hk2")} x={-8.2} color="#7d5036" />
+            <DeerLeg legRef={ref("fl2")} kneeRef={ref("fk2")} x={11.8} color="#7d5036" />
+            <DeerLeg legRef={ref("hl1")} kneeRef={ref("hk1")} x={-12.7} color="#8b5a3c" />
+            <DeerLeg legRef={ref("fl1")} kneeRef={ref("fk1")} x={7.3} color="#8b5a3c" />
 
-          <g ref={ref("body")}>
-            <g ref={ref("breath")}>
-              <ellipse cx="-2" cy="-3" rx="17" ry="8" fill="#a6724a" />
-              <ellipse cx="-2" cy="3" rx="13" ry="3.5" fill="#f5e6c4" opacity="0.9" />
-              <circle cx="-10" cy="-7" r="1.4" fill="#fff" opacity="0.75" />
-              <circle cx="-5" cy="-9" r="1.2" fill="#fff" opacity="0.7" />
-              <circle cx="0" cy="-7.5" r="1.3" fill="#fff" opacity="0.75" />
-              <circle cx="5" cy="-9" r="1.2" fill="#fff" opacity="0.65" />
-              <circle cx="9" cy="-5" r="1" fill="#fff" opacity="0.6" />
-              <circle cx="-13" cy="-4" r="0.9" fill="#fff" opacity="0.55" />
-              <circle cx="-7" cy="-4" r="0.8" fill="#fff" opacity="0.5" />
-              <ellipse cx="-17" cy="-4" rx="2.5" ry="3.5" fill="#fff" opacity="0.80" />
-            </g>
-            <g ref={ref("tail")} transform="translate(-17, -6.8)">
-              <path d="M 0,0 C -2,-0.5 -2,-5.5 0,-5.5 C 2,-5.5 2,-0.5 0,0 Z" fill="#fff" />
-            </g>
+            <g ref={ref("body")}>
+              <g ref={ref("breath")}>
+                <ellipse cx="-2" cy="-3" rx="17" ry="8" fill={BR} />
+                <ellipse cx="-2" cy="3" rx="13" ry="3.5" fill="#f5e6c4" opacity="0.9" />
+                <circle cx="-10" cy="-7" r="1.4" fill="#fff" opacity="0.75" />
+                <circle cx="-5" cy="-9" r="1.2" fill="#fff" opacity="0.7" />
+                <circle cx="0" cy="-7.5" r="1.3" fill="#fff" opacity="0.75" />
+                <circle cx="5" cy="-9" r="1.2" fill="#fff" opacity="0.65" />
+                <circle cx="9" cy="-5" r="1" fill="#fff" opacity="0.6" />
+                <circle cx="-13" cy="-4" r="0.9" fill="#fff" opacity="0.55" />
+                <circle cx="-7" cy="-4" r="0.8" fill="#fff" opacity="0.5" />
+                <ellipse cx="-17" cy="-4" rx="2.5" ry="3.5" fill="#fff" opacity="0.80" />
+              </g>
+              <g ref={ref("tail")} transform="translate(-17, -6.8)">
+                <path d="M 0,0 C -2,-0.5 -2,-5.5 0,-5.5 C 2,-5.5 2,-0.5 0,0 Z" fill="#fff" />
+              </g>
 
-            <g ref={ref("neck")}>
-              <path d="M 8,-6 Q 13,-11 17,-13 L 21,-11 Q 16,-6 11,-3 Z" fill="#a6724a" />
-              <g ref={ref("head")}>
-                <path d="M 14,-22 Q 20,-26 25,-22 Q 29,-18 29,-13 Q 28,-9 24,-9 Q 19,-10 15,-12 Q 12,-15 13,-20 Z" fill="#a6724a" />
-                <ellipse cx="19" cy="-14" rx="2.5" ry="2" fill="#c2875f" opacity="0.55" />
-                <ellipse cx="27" cy="-12.5" rx="3.2" ry="2.4" fill="#c9956b" />
-                <ellipse cx="28.5" cy="-12.2" rx="1" ry="0.8" fill="#1a1a1a" />
-                <circle cx="28.7" cy="-12.5" r="0.32" fill="#fff" opacity="0.6" />
-                <g ref={ref("eyeOpen")}>
-                  <ellipse cx="21" cy="-16.5" rx="1.6" ry="2" fill="#1a1a1a" />
-                  <circle cx="21.5" cy="-17.1" r="0.65" fill="#fff" />
-                  <circle cx="21" cy="-15.8" r="0.28" fill="#fff" opacity="0.8" />
-                </g>
-                <path ref={ref("eyeClosed")} d="M 19.2,-16.5 Q 21,-14.8 22.8,-16.5" stroke="#1a1a1a" strokeWidth="1.3" fill="none" strokeLinecap="round" opacity="0" />
-                <g ref={ref("earL")} transform="translate(17, -24)">
-                  <ellipse cx="0" cy="-4.5" rx="1.8" ry="4.5" fill="#8b5a3c" />
-                  <ellipse cx="0" cy="-4" rx="1" ry="3.2" fill="#c2875f" opacity="0.9" />
-                </g>
-                <g ref={ref("earR")} transform="translate(19, -22)">
-                  <ellipse cx="0" cy="-6.5" rx="2.3" ry="6.5" fill="#a6724a" />
-                  <ellipse cx="0" cy="-6" rx="1.4" ry="4.8" fill="#e0a88a" />
+              <g ref={ref("neck")}>
+                <path d="M 8,-6 Q 13,-11 17,-13 L 21,-11 Q 16,-6 11,-3 Z" fill={BR} />
+                <g ref={ref("head")}>
+                  {/* Profil (das bisherige Gesicht) */}
+                  <g ref={ref("headP")}>
+                    <path d="M 14,-22 Q 20,-26 25,-22 Q 29,-18 29,-13 Q 28,-9 24,-9 Q 19,-10 15,-12 Q 12,-15 13,-20 Z" fill={BR} />
+                    <ellipse cx="19" cy="-14" rx="2.5" ry="2" fill="#c2875f" opacity="0.55" />
+                    <ellipse cx="27" cy="-12.5" rx="3.2" ry="2.4" fill="#c9956b" />
+                    <ellipse cx="28.5" cy="-12.2" rx="1" ry="0.8" fill="#1a1a1a" />
+                    <circle cx="28.7" cy="-12.5" r="0.32" fill="#fff" opacity="0.6" />
+                    <g ref={ref("eyeOpen")}>
+                      <ellipse cx="21" cy="-16.5" rx="1.6" ry="2" fill="#1a1a1a" />
+                      <circle cx="21.5" cy="-17.1" r="0.65" fill="#fff" />
+                      <circle cx="21" cy="-15.8" r="0.28" fill="#fff" opacity="0.8" />
+                    </g>
+                    <path ref={ref("eyeClosed")} d="M 19.2,-16.5 Q 21,-14.8 22.8,-16.5" stroke="#1a1a1a" strokeWidth="1.3" fill="none" strokeLinecap="round" opacity="0" />
+                    <g ref={ref("earL")} transform="translate(17, -24)">
+                      <ellipse cx="0" cy="-4.5" rx="1.8" ry="4.5" fill="#8b5a3c" />
+                      <ellipse cx="0" cy="-4" rx="1" ry="3.2" fill="#c2875f" opacity="0.9" />
+                    </g>
+                    <g ref={ref("earR")} transform="translate(19, -22)">
+                      <ellipse cx="0" cy="-6.5" rx="2.3" ry="6.5" fill={BR} />
+                      <ellipse cx="0" cy="-6" rx="1.4" ry="4.8" fill="#e0a88a" />
+                    </g>
+                  </g>
+                  {/* Frontansicht (schaut den Betrachter an) */}
+                  <g ref={ref("headF")} opacity="0">
+                    <g ref={ref("earFL")} transform="translate(15.2, -21.5) rotate(-38)">
+                      <ellipse cx="0" cy="-5.5" rx="2.3" ry="5.8" fill={BR} />
+                      <ellipse cx="0" cy="-5" rx="1.4" ry="4.2" fill="#e0a88a" />
+                    </g>
+                    <g ref={ref("earFR")} transform="translate(22.8, -21.5) rotate(38)">
+                      <ellipse cx="0" cy="-5.5" rx="2.3" ry="5.8" fill={BR} />
+                      <ellipse cx="0" cy="-5" rx="1.4" ry="4.2" fill="#e0a88a" />
+                    </g>
+                    <path d="M 19,-23.5 C 23.5,-23.5 25.5,-20 25,-16.5 C 24.5,-13 22.5,-10.2 19,-10 C 15.5,-10.2 13.5,-13 13,-16.5 C 12.5,-20 14.5,-23.5 19,-23.5 Z" fill={BR} />
+                    <ellipse cx="19" cy="-20.5" rx="2" ry="1.4" fill="#c2875f" opacity="0.5" />
+                    <ellipse cx="19" cy="-12.3" rx="3.3" ry="2.6" fill="#c9956b" />
+                    <ellipse cx="19" cy="-13.1" rx="1.4" ry="0.95" fill="#1a1a1a" />
+                    <circle cx="18.6" cy="-13.4" r="0.3" fill="#fff" opacity="0.6" />
+                    <g ref={ref("eyeOpenF")}>
+                      <ellipse cx="16.4" cy="-17.2" rx="1.45" ry="1.85" fill="#1a1a1a" />
+                      <ellipse cx="21.6" cy="-17.2" rx="1.45" ry="1.85" fill="#1a1a1a" />
+                      <circle cx="16.9" cy="-17.8" r="0.6" fill="#fff" />
+                      <circle cx="22.1" cy="-17.8" r="0.6" fill="#fff" />
+                    </g>
+                    <g ref={ref("eyeClosedF")} opacity="0" stroke="#1a1a1a" strokeWidth="1.1" fill="none" strokeLinecap="round">
+                      <path d="M 15,-17.2 Q 16.4,-15.8 17.8,-17.2" />
+                      <path d="M 20.2,-17.2 Q 21.6,-15.8 23,-17.2" />
+                    </g>
+                  </g>
                 </g>
               </g>
-            </g>
 
-            <g ref={ref("zzz")} opacity="0" fontFamily="Georgia, 'Times New Roman', serif" fontWeight="bold">
-              {zzz(35, -10, 5.5, "#b0cce0", "4s", "0s", -38)}
-              {zzz(31, -8, 4, "#98bcd4", "3.2s", "-1.8s", -30)}
-              {zzz(40, -13, 3.2, "#88acc4", "2.8s", "-2.5s", -33)}
+              <g ref={ref("zzz")} opacity="0" fontFamily="Georgia, 'Times New Roman', serif" fontWeight="bold">
+                {zzz(35, -10, 5.5, "#b0cce0", "4s", "0s", -38)}
+                {zzz(31, -8, 4, "#98bcd4", "3.2s", "-1.8s", -30)}
+                {zzz(40, -13, 3.2, "#88acc4", "2.8s", "-2.5s", -33)}
+              </g>
             </g>
           </g>
 
-          {/* Schmetterling (Reh-lokale Koordinaten, wird von der Engine bewegt) */}
+          {/* Schmetterling (Szenen-Koordinaten), Stil Kleiner Fuchs */}
           <g ref={ref("bf")} opacity="0">
             <g ref={ref("bfWings")}>
-              <path d="M 0,0 C -1.5,-3.2 -4.2,-3.6 -4,-1.2 C -3.8,0.4 -1.6,0.6 0,0 Z" fill="#f4c96b" />
-              <path d="M 0,0 C 1.5,-3.2 4.2,-3.6 4,-1.2 C 3.8,0.4 1.6,0.6 0,0 Z" fill="#f0b45e" />
-              <path d="M 0,0.2 C -1.2,1.6 -2.8,2.4 -2.6,1.2 C -2.4,0.4 -1,0.2 0,0.2 Z" fill="#e9a35a" />
-              <path d="M 0,0.2 C 1.2,1.6 2.8,2.4 2.6,1.2 C 2.4,0.4 1,0.2 0,0.2 Z" fill="#e39a54" />
+              <path d="M 0,0 C -1.5,-3.4 -4.6,-3.9 -4.3,-1.2 C -4.1,0.5 -1.7,0.6 0,0 Z" fill="#f2782f" stroke="#3a1c0c" strokeWidth="0.35" />
+              <path d="M 0,0 C 1.5,-3.4 4.6,-3.9 4.3,-1.2 C 4.1,0.5 1.7,0.6 0,0 Z" fill="#f58a3a" stroke="#3a1c0c" strokeWidth="0.35" />
+              <path d="M 0,0.2 C -1.3,1.8 -3,2.6 -2.8,1.3 C -2.6,0.4 -1.1,0.2 0,0.2 Z" fill="#e8662a" stroke="#3a1c0c" strokeWidth="0.3" />
+              <path d="M 0,0.2 C 1.3,1.8 3,2.6 2.8,1.3 C 2.6,0.4 1.1,0.2 0,0.2 Z" fill="#ec7030" stroke="#3a1c0c" strokeWidth="0.3" />
+              <circle cx="-2.6" cy="-1.9" r="0.45" fill="#2a1408" />
+              <circle cx="2.6" cy="-1.9" r="0.45" fill="#2a1408" />
+              <circle cx="-3.6" cy="-2.3" r="0.35" fill="#fff6dc" />
+              <circle cx="3.6" cy="-2.3" r="0.35" fill="#fff6dc" />
             </g>
-            <rect x="-0.25" y="-1.6" width="0.5" height="3.2" rx="0.25" fill="#4a3a2a" />
+            <rect x="-0.3" y="-1.8" width="0.6" height="3.6" rx="0.3" fill="#2a1a10" />
+            <path d="M -0.2,-1.7 Q -0.8,-2.9 -1.3,-3.2 M 0.2,-1.7 Q 0.8,-2.9 1.3,-3.2" stroke="#2a1a10" strokeWidth="0.2" fill="none" />
           </g>
         </g>
       );
@@ -649,7 +759,8 @@
       return (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", margin: "10px 0 4px" }}>
           <span style={{ fontSize: 11, color: C.textFaint, width: "100%", textAlign: "center", letterSpacing: 1 }}>REH-VORSCHAU</span>
-          {[["Automatisch", "auto"], ["Stehen", "idle"], ["Grasen", "graze"], ["Umschauen", "look"], ["Schnuppern", "sniff"],
+          {[["Automatisch", "auto"], ["Stehen", "idle"], ["Spazieren", "walk"], ["Grasen", "graze"], ["Umschauen", "look"],
+            ["Zu dir schauen", "viewer"], ["Nach hinten", "back"], ["Schnuppern", "sniff"],
             ["Liegen", "rest"], ["Schlafen", "sleep"], ["Schmetterling", "butterfly"]].map(([l, n]) => btn(l, n))}
         </div>
       );
