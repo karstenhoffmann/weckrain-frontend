@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.19.0
+  Version: 1.20.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.19.0";
+    const FRONTEND_VERSION = "1.20.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -599,6 +599,16 @@
       } catch (e) { return false; }
     }
 
+    // Hausvariante der 3D-Vorschau: ?haus=a|b|c|d (Standard b)
+    function houseVariant() {
+      try {
+        const q = new URLSearchParams(window.location.search).get("haus");
+        if (["a", "b", "c", "d"].includes(q)) localStorage.setItem("wetter_haus", q);
+        const v = localStorage.getItem("wetter_haus");
+        return ["a", "b", "c", "d"].includes(v) ? v : "b";
+      } catch (e) { return "b"; }
+    }
+
     // Jahreszeit der 3D-Szene: nach Datum, zum Testen ?jahreszeit=fruehling|sommer|herbst|spaetherbst|winter (auto = Datum).
     // ?winter=1 erzwingt Winter. Weihnachtsschmuck vom 1. Dezember bis 6. Januar (bei erzwungenem Winter immer).
     const SEASONS = ["fruehling", "sommer", "herbst", "spaetherbst", "winter"];
@@ -672,29 +682,70 @@
         const m = add(mesh(new T.CylinderGeometry(r, r * 1.04, 1.6, 22), stoneM, false, true)); m.scale.z = 0.62; m.position.set(x + (i % 2 ? 2 : -2), 0.5, z); m.rotation.y = (rnd() - 0.5) * 0.4;
       });
 
-      // ── Haus (Spielzeugproportionen, frontal) ──
-      const wallM = toon(0x56628a), plinthM = toon(0x3f4762), roofM = toon(0x7a573c), roofEdgeM = toon(0x684a33);
-      const frameM = toon(0xd9d2c3), sillM = toon(0xcfc6b4), chimM = toon(0x8a6a58), chimCapM = toon(0x6b6670);
+      // ── Haus: alpenländisch, Spielzeugproportionen, frontal ──
+      // Varianten (Vorschau ?haus=a|b|c|d): A schlicht, B mit Holzbalkon und Pfosten, C wie B mit salbeigrünem Sockel,
+      // D wie B mit gebrochen weißer Wand. Farben angelehnt an Sikkens F6.07.77 (Beige), F2.03.88 (Weiß), JO.10.70 (Salbei).
+      const HV = houseVariant();
+      const balcony = HV !== "a";
+      const wallM = toon(HV === "d" ? 0xdad5c8 : 0xc9c1a8), plinthM = toon(HV === "c" ? 0x9eb092 : 0x9b9384);
+      const roofM = toon(0x5a524c), roofEdgeM = toon(0xe8e5dc), whiteM = toon(0xe8e5dc);
+      const woodM2 = toon(0xa97c52), woodDark = toon(0x8c6544), gableM = toon(0xb08459), grooveM = toon(0x8a6440);
+      const frameM = toon(0x4a3a2e), sillM = toon(0xe6e3da), chimM = toon(HV === "d" ? 0xd4cebf : 0xc5b998), chimCapM = toon(0x7d7f86);
       box(135, 148, 250, 130, DEP, wallM, ZH);
-      box(131, 266, 258, 12, DEP + 4, plinthM, ZH + 2);
-      const yE = yAt(148, ZH), yA = yAt(62, ZH);
-      const tri = new T.Shape(); tri.moveTo(135, yE); tri.lineTo(260, yE + (yA - yE) * (125 / 145)); tri.lineTo(385, yE); tri.lineTo(135, yE);
-      const gable = add(mesh(new T.ShapeGeometry(tri), wallM, false, true)); gable.position.z = ZH;
-      { const back = gable.clone(); back.position.z = ZH - DEP; add(back); }
-      const slopeA = Math.atan2(yA - yE, 145), slopeL = Math.hypot(145, yA - yE), RT = 5, OV = 9;
+      if (HV === "c") box(131, 254, 258, 24, DEP + 4, plinthM, ZH + 2); else box(131, 268, 258, 10, DEP + 4, plinthM, ZH + 2);
+      // Flaches, breites Satteldach: Dachlinie durch die Wandecken, First bei SVG-y 84, Traufe bei x 100 / 420
+      const yE = yAt(148, ZH), yA = yAt(84, ZH), kR = (yA - yE) / 125, yEave = yE - 35 * kR;
+      const roofBottom = (x) => yA - Math.abs(x - 260) * kR;          // Unterkante des Dachs (Welt-y) an Stelle x
+      // Giebel in Holz mit breiten senkrechten Fugen
+      const tri = new T.Shape(); tri.moveTo(135, yE); tri.lineTo(260, yA); tri.lineTo(385, yE); tri.lineTo(135, yE);
+      const gable = add(mesh(new T.ShapeGeometry(tri), gableM, false, true)); gable.position.z = ZH;
+      { const back = add(mesh(new T.ShapeGeometry(tri), wallM)); back.position.z = ZH - DEP; }
+      for (let x = 152; x <= 368; x += 24) {
+        const h = roofBottom(x) - yE - 1.5; if (h < 2) continue;
+        const g = add(mesh(BOX, grooveM)); g.scale.set(1.6, h, 0.8); g.position.set(x, yE + h / 2, ZH + 0.3);
+      }
+      { const ledge = add(mesh(BOX, whiteM, true, true)); ledge.scale.set(254, 3, 4); ledge.position.set(260, yE, ZH + 1); }   // Trennleiste Putz/Holz
+      const slopeA = Math.atan(kR), slopeL = Math.hypot(160, yA - yEave), RT = 6, OV = 16;
       [-1, 1].forEach((sd) => {
-        const slab = mesh(BOX, [roofEdgeM, roofEdgeM, roofM, roofEdgeM, roofEdgeM, roofEdgeM], true, true);
-        slab.scale.set(slopeL + 10, RT, DEP + 2 * OV);
-        const ca = Math.cos(slopeA), sa = Math.sin(slopeA), ux = sd < 0 ? ca : -ca, uy = sa, nx = sd < 0 ? -sa : sa, ny = ca;
-        const mx = ((sd < 0 ? 115 : 405) + 260) / 2, my = (yE + yA) / 2;
-        slab.position.set(mx + nx * RT / 2 - ux * 5, my + ny * RT / 2 - uy * 5, ZH - DEP / 2);
+        // Oberseite dunkle Ziegel, Stirn und Untersicht weiß
+        const slab = mesh(BOX, [whiteM, whiteM, roofM, whiteM, roofEdgeM, whiteM], true, true);
+        slab.scale.set(slopeL + 4, RT, DEP + 2 * OV);
+        const ca = Math.cos(slopeA), sa = Math.sin(slopeA), nx = sd < 0 ? -sa : sa, ny = ca;
+        const mx = ((sd < 0 ? 100 : 420) + 260) / 2, my = (yEave + yA) / 2;
+        slab.position.set(mx + nx * RT / 2, my + ny * RT / 2, ZH - DEP / 2 + 0);
         slab.rotation.z = sd < 0 ? slopeA : -slopeA; add(slab);
       });
-      { const r = add(mesh(new T.CylinderGeometry(2.6, 2.6, DEP + 2 * OV, 14), roofEdgeM, true, true)); r.rotation.x = Math.PI / 2; r.position.set(260, yA + RT * 0.55 / Math.cos(slopeA), ZH - DEP / 2); }
-      const chimZ = ZH - DEP * 0.55;
-      { const c = add(mesh(BOX, chimM, true, true)); c.scale.set(22, 56, 18); c.position.set(342, 168, chimZ); }
-      { const c = add(mesh(BOX, chimCapM, true, true)); c.scale.set(28, 6, 24); c.position.set(342, 198, chimZ); }
-      spots.push([342, 202, chimZ]);
+      { const r = add(mesh(BOX, roofM, true, true)); r.scale.set(10, 4, DEP + 2 * OV + 1); r.position.set(260, yA + RT / Math.cos(slopeA) + 0.5, ZH - DEP / 2); }
+      // Weiße Balkenköpfe unter dem Dachüberstand
+      [112, 150, 196, 236, 284, 324, 370, 408].forEach((x) => {
+        const b = add(mesh(BOX, whiteM, true, true)); b.scale.set(6, 7, OV + 2); b.position.set(x, roofBottom(x) - 3.4, ZH + OV / 2 - 1);
+      });
+      // Schornstein: Putz mit grauer Blechkappe
+      const chimZ = ZH - DEP * 0.5, chimX = 340, chimTop = roofBottom(chimX) + RT + 30;
+      { const c = add(mesh(BOX, chimM, true, true)); c.scale.set(22, 46, 20); c.position.set(chimX, chimTop - 23, chimZ); }
+      { const c = add(mesh(BOX, chimCapM, true, true)); c.scale.set(28, 3, 26); c.position.set(chimX, chimTop + 1.5, chimZ); }
+      { const c = add(mesh(BOX, chimCapM, true, true)); c.scale.set(12, 5, 12); c.position.set(chimX, chimTop + 5, chimZ); }
+      spots.push([chimX, chimTop + 9, chimZ]);
+      const smokeY = chimTop + 8;
+      // Holzbalkon unter dem Giebel mit zwei schweren Pfosten und Lichtleiste
+      let ledStrip = null, ledGlow = null;
+      if (balcony) {
+        const bf = ZH + 15;
+        // ganz unter dem Dach: so breit, wie die Dachunterkante auf Höhe des Handlaufs erlaubt
+        box(192, 140, 136, 8, 16, woodDark, bf);                                     // Bodenplatte
+        for (let x = 196; x <= 322; x += 8.4) box(x, 122, 4.6, 18, 2, woodM2, bf - 0.5);   // Latten
+        box(190, 118, 140, 5, 4, woodM2, bf + 0.5);                                  // Handlauf
+        box(190, 136, 140, 3, 3, woodDark, bf);                                      // untere Leiste
+        [200, 245, 275, 320].forEach((x) => box(x - 3.5, 148, 7, 7, 18, woodDark, bf + 1));   // Balkenköpfe
+        rect(236, 96, 48, 44, fixed(0x2a3346), ZH + 0.4);                             // Balkontür im Giebel
+        [[234, 94, 52, 3], [234, 94, 3, 46], [283, 94, 3, 46], [258.5, 94, 3, 46]].forEach(([x, y, w, h]) => box(x, y, w, h, 1.6, frameM, ZH + 1.6));
+        [137, 373].forEach((x) => box(x, roofBottomSvg(x + 5) , 10, 278 - roofBottomSvg(x + 5), 10, woodM2, bf));   // Pfosten bis unters Dach
+        ledStrip = rect(194, 148.2, 132, 1.6, new T.MeshBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 0 }), bf - 1);
+        ledGlow = add(mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), color: 0xffc879, transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending })));
+        ledGlow.scale.set(170, 30, 1); ledGlow.position.set(260, yAt(156, ZH + 2), ZH + 2);
+        spots.push([210, yAt(118, bf) + 3, bf], [310, yAt(118, bf) + 3, bf]);
+      }
+      function roofBottomSvg(x) { return 148 - (125 - Math.abs(x - 260)) * 64 / 125; }
       // Fenster: Rahmen steht vor, Scheiben liegen zurück, Fensterbank mit Tiefe
       const win = (x0, key) => {
         rect(x0, 165, 60, 48, basic("winBg"), ZH + 0.2);
@@ -720,7 +771,7 @@
       box(236, 276, 48, 4, 12, sillM, ZH + 12);
       // Vordach: zwei kleine Dachplatten auf Konsolen
       { const cy = yAt(206, ZH + 14), cz = ZH + 9;
-        [-1, 1].forEach((sd) => { const p = mesh(BOX, [roofEdgeM, roofEdgeM, roofM, roofEdgeM, roofEdgeM, roofEdgeM], true, true); p.scale.set(30, 3, 22); p.rotation.z = sd * -0.42; p.position.set(260 + sd * 13.5, cy, cz); add(p); });
+        [-1, 1].forEach((sd) => { const p = mesh(BOX, [whiteM, whiteM, roofM, whiteM, roofEdgeM, whiteM], true, true); p.scale.set(31, 4, 22); p.rotation.z = sd * -0.42; p.position.set(260 + sd * 13.5, cy, cz); add(p); });
         spots.push([260, cy + 7, cz]); }
       // Lichtquellen der Fenster und der Tür (nachts)
       // tief und vor dem Haus: Licht fällt auf Rasen, Büsche und Reh, nicht flächig auf die Wand
@@ -942,12 +993,12 @@
       const tickSmoke = (S, t, dt) => {
         const amt = S.smoke || 0;
         smokeAcc += dt * amt * 1.4;
-        if (smokeAcc > 1) { smokeAcc = 0; const p = puffs3.find((q) => q.age >= q.life); if (p) { p.age = 0; p.life = 5 + Math.random() * 2.5; p.x0 = 342 + (Math.random() - 0.5) * 6; p.m.position.set(p.x0, 204, chimZ); p.ph = Math.random() * 6; } }
+        if (smokeAcc > 1) { smokeAcc = 0; const p = puffs3.find((q) => q.age >= q.life); if (p) { p.age = 0; p.life = 5 + Math.random() * 2.5; p.x0 = chimX + (Math.random() - 0.5) * 6; p.m.position.set(p.x0, smokeY, chimZ); p.ph = Math.random() * 6; } }
         const night = S.isDay ? 0 : 1;
         for (const p of puffs3) {
           if (p.age >= p.life) { p.m.visible = false; continue; }
           p.age += dt; const u = p.age / p.life; p.m.visible = true;
-          p.m.position.y = 204 + p.age * 8; p.m.position.x = p.x0 + p.age * p.age * 0.6 + Math.sin(p.age * 0.9 + p.ph) * 2.5;
+          p.m.position.y = smokeY + p.age * 8; p.m.position.x = p.x0 + p.age * p.age * 0.6 + Math.sin(p.age * 0.9 + p.ph) * 2.5;
           p.m.scale.setScalar(6 + u * 18);
           p.m.material.color.setHex(night ? 0x6e7890 : 0xc8ced8);
           p.m.material.opacity = (night ? 0.22 : 0.32) * Math.min(1, u * 5) * (1 - u) * Math.max(0.5, amt);
@@ -989,6 +1040,11 @@
           WL[key].intensity += ((on && !S.isDay ? (key === "k" ? 0.75 : 0.55) * (0.85 + 0.15 * pulse) : 0) - WL[key].intensity) * k;
         });
         WL.e.intensity += ((S.eOn && !S.isDay ? 0.45 : 0) - WL.e.intensity) * k;
+        if (ledStrip) {   // Lichtleiste unter dem Balkon: abends und nachts warm, dezent
+          const on = S.slotName === "Abends" || S.slotName === "Nachts" || S.slotName === "Morgens";
+          ledStrip.material.opacity += ((on ? 0.95 : 0) - ledStrip.material.opacity) * k;
+          ledGlow.material.opacity += ((on ? 0.32 : 0) - ledGlow.material.opacity) * k;
+        }
         doorLight.material.opacity = S.eOn ? 0.3 : 0;
         knob.position.x += ((S.eOn ? 250 : 270) - knob.position.x) * (knob.userData.init ? k * 1.5 : 1); knob.userData.init = true;
         knob.position.y = yAt(250, dz + 1.2);
@@ -2286,7 +2342,7 @@
         {s3 && <svg viewBox="0 0 520 320" fill="none" aria-hidden="true" style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
           <g clipPath="url(#sceneClip)">
             <g transform="translate(60, 0)">
-              <g transform="translate(0, -3)">{birdEl}</g>
+              <g transform="translate(0, 14)">{birdEl}</g>
               {kErrBadge}{sErrBadge}{eErrBadge}
               {zzzEl}
             </g>
