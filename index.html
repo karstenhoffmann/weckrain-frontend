@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.15.0
+  Version: 1.16.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.15.0";
+    const FRONTEND_VERSION = "1.16.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -386,7 +386,7 @@
 
       // Schatten (flach auf dem Boden)
       const shadow = new T.Mesh(new T.CircleGeometry(1, 32), new T.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.26, depthWrite: false }));
-      shadow.rotation.x = -Math.PI / 2; shadow.scale.set(19, 5.5, 1); shadow.position.set(-1, 0.05, 0);
+      shadow.rotation.x = -Math.PI / 2; shadow.scale.set(19, 5.5, 1); shadow.position.set(-1, 0.4, 0);
       root.add(shadow); J.shadow = shadow;
 
       // ── Beine ──
@@ -585,10 +585,274 @@
       return J;
     }
 
-    function Deer3D({ sleeping, light, isDayish, zzzRef, onFail, winter }) {
+    // ─── 3D-SZENE (Vorschau ?szene=3d) ───────────────────────────────────
+    // Haus, Garten und Bäume als echte 3D-Objekte im selben Canvas wie das Reh.
+    // Gleiche Kamera wie das Reh (orthografisch, 10° von oben). Die Hausfront liegt so in der Tiefe,
+    // dass sie pixelgenau dort erscheint, wo sie im SVG lag; Zaun, Büsche, Bäume stehen davor.
+    // Flache Illustrationsfarben (MeshBasic) fürs Haus, Toon-Schattierung für Bäume.
+    function scenePreviewOn() {
+      try {
+        const q = new URLSearchParams(window.location.search).get("szene");
+        if (q === "3d") localStorage.setItem("wetter_szene", "3d");
+        if (q === "2d") localStorage.removeItem("wetter_szene");
+        return localStorage.getItem("wetter_szene") === "3d" && localStorage.getItem("wetter_mode") === "karsten";
+      } catch (e) { return false; }
+    }
+
+    function buildScene3D(T, scene) {
+      const TS = Math.sin(D3.TILT), TC = Math.cos(D3.TILT), GR = D3.GROUND;
+      const zG = (sy) => (sy - GR) / TS;                       // Tiefe, in der der Boden bei SVG-y liegt
+      const yAt = (sy, z) => (GR - sy + z * TS) / TC;          // Welt-y, das in Tiefe z bei SVG-y erscheint
+      const ZH = zG(278), DEP = 60;                             // Hausfront, Haustiefe
+      const PL = new T.PlaneGeometry(1, 1), BOX = new T.BoxGeometry(1, 1, 1), SPH = new T.SphereGeometry(1, 20, 14);
+      const root = new T.Group(); scene.add(root);
+      // Farben mit weichem Übergang (wie die CSS-Transitions im SVG)
+      const tints = [];
+      const basic = (key, opts) => {
+        const m = new T.MeshBasicMaterial(Object.assign({ color: 0x000000 }, opts || {}));
+        if (key) tints.push({ m, key, op: opts && opts.opacity !== undefined ? opts.opacity : 1 });
+        return m;
+      };
+      const fixed = (hex, opts) => new T.MeshBasicMaterial(Object.assign({ color: hex }, opts || {}));
+      const grad = new T.DataTexture(new Uint8Array([150, 150, 150, 255, 205, 205, 205, 255, 255, 255, 255, 255]), 3, 1, T.RGBAFormat);
+      grad.minFilter = grad.magFilter = T.NearestFilter; grad.needsUpdate = true;
+      const toon = (hex) => new T.MeshToonMaterial({ color: hex, gradientMap: grad });
+      const add = (mesh, parent) => { (parent || root).add(mesh); return mesh; };
+      // Rechteck auf einer senkrechten Ebene in Tiefe z, in SVG-Koordinaten (absolut)
+      const rect = (x, y, w, h, mat, z) => {
+        const m = new T.Mesh(PL, mat); m.scale.set(w, h / TC, 1); m.position.set(x + w / 2, yAt(y + h / 2, z), z); return add(m);
+      };
+      // Quader, dessen Vorderseite in Tiefe z das SVG-Rechteck abdeckt
+      const box = (x, y, w, h, d, mat, z) => {
+        const m = new T.Mesh(BOX, mat); m.scale.set(w, h / TC, d); m.position.set(x + w / 2, yAt(y + h / 2, z), z - d / 2); return add(m);
+      };
+      const spots = [];
+
+      // ── Boden: Rückkante folgt der Horizont-Ellipse des SVG ──
+      const gs = new T.Shape();
+      const topY = (x) => 305 - 30 * Math.sqrt(Math.max(0, 1 - Math.pow((x - 260) / 280, 2)));
+      gs.moveTo(-40, -90);
+      for (let x = -40; x <= 560; x += 10) gs.lineTo(x, (GR - topY(x)) / TS);
+      gs.lineTo(560, -90); gs.lineTo(-40, -90);
+      const ground = add(new T.Mesh(new T.ShapeGeometry(gs), basic("ground", { transparent: true, opacity: 0.8 })));
+      ground.rotation.x = -Math.PI / 2;
+      // Gartenweg zur Tür
+      const ps = new T.Shape();
+      ps.moveTo(255, -ZH - 1); ps.lineTo(265, -ZH - 1); ps.quadraticCurveTo(268, 60, 274, 8); ps.lineTo(246, 8); ps.quadraticCurveTo(252, 60, 255, -ZH - 1);
+      const path = add(new T.Mesh(new T.ShapeGeometry(ps), basic("path", { transparent: true, opacity: 0.55 })));
+      path.rotation.x = -Math.PI / 2; path.position.y = 0.15;
+
+      // ── Haus ──
+      const wallF = basic("wall"), wallS = basic("wallDark");
+      box(135, 148, 250, 130, DEP, [wallS, wallS, wallS, wallS, wallF, wallS], ZH);
+      [168, 188, 208, 228, 248].forEach((y) => rect(140, y - 0.15, 240, 0.3, basic("siding", { transparent: true, opacity: 1 }), ZH + 0.05));
+      // Dach: Giebeldreieck vorn, zwei Dachplatten mit Überstand, First
+      const yE = yAt(148, ZH), yA = yAt(62, ZH);
+      const tri = new T.Shape(); tri.moveTo(115, yE); tri.lineTo(260, yA); tri.lineTo(405, yE); tri.lineTo(115, yE);
+      const gable = add(new T.Mesh(new T.ShapeGeometry(tri), basic("roof"))); gable.position.z = ZH + 0.1;
+      const roofTop = basic("roofTop"), roofEdge = basic("roofEdge"), roofUnder = basic("roofUnder");
+      const slopeA = Math.atan2(yA - yE, 145), slopeL = Math.hypot(145, yA - yE), RT = 3.2, OV = 7;
+      // Dachplatten: Unterseite genau auf der Giebelkante, 8 Einheiten Überstand an der Traufe
+      [-1, 1].forEach((sd) => {
+        const slab = new T.Mesh(BOX, [roofEdge, roofEdge, roofTop, roofUnder, roofEdge, roofEdge]);
+        slab.scale.set(slopeL + 8, RT, DEP + 2 * OV);
+        const ca = Math.cos(slopeA), sa = Math.sin(slopeA);
+        const ux = sd < 0 ? ca : -ca, uy = sa;               // Richtung Traufe → First
+        const nx = sd < 0 ? -sa : sa, ny = ca;                // Normale nach außen
+        const mx = ((sd < 0 ? 115 : 405) + 260) / 2, my = (yE + yA) / 2;
+        slab.position.set(mx + nx * RT / 2 - ux * 4, my + ny * RT / 2 - uy * 4, ZH - DEP / 2);
+        slab.rotation.z = sd < 0 ? slopeA : -slopeA;
+        add(slab);
+      });
+      const ridge = add(new T.Mesh(new T.CylinderGeometry(2.2, 2.2, DEP + 2 * OV, 10), roofEdge));
+      ridge.rotation.x = Math.PI / 2; ridge.position.set(260, yA + RT * 0.9, ZH - DEP / 2);
+      // Schornstein (fest grau wie im SVG), steht auf der rechten Dachfläche
+      const chimZ = -205;
+      const chim = fixed(0x4a4a55), chimCap = fixed(0x5a5a62), chimTop = fixed(0x62626c);
+      { const m = new T.Mesh(BOX, chim); m.scale.set(20, 46, 20); m.position.set(345, 172, chimZ - 10); add(m); }
+      { const m = new T.Mesh(BOX, [chimCap, chimCap, chimTop, chimCap, chimCap, chimCap]); m.scale.set(26, 7, 26); m.position.set(345, 198.5, chimZ - 10); add(m); }
+      spots.push([345, 202, chimZ - 10]);
+
+      // Fenster: dunkler Grund, vier Scheiben (Licht je Sensor), Rahmen, Sprossen, Fensterbank mit Tiefe
+      const win = (x0, key) => {
+        const zf = ZH + 0.2;
+        rect(x0, 165, 60, 48, basic("winBg"), zf);
+        const panes = [[x0 + 2, 167, 26, 21, 0.85], [x0 + 32, 167, 26, 21, 0.75], [x0 + 2, 191, 26, 20, 0.7], [x0 + 32, 191, 26, 20, 0.8]];
+        const mats = panes.map(([x, y, w, h, op]) => { const m = basic(key + "Pane", { transparent: true, opacity: 1 }); m.userData.onOp = op; rect(x, y, w, h, m, zf + 0.1); return m; });
+        const fr = basic("frame");
+        [[x0, 164.25, 60, 1.5], [x0, 211.25, 60, 1.5], [x0 - 0.75, 165, 1.5, 48], [x0 + 59.25, 165, 1.5, 48], [x0 + 29.25, 165, 1.5, 48], [x0, 188.25, 60, 1.5]]
+          .forEach(([x, y, w, h]) => rect(x, y, w, h, fr, zf + 0.3));
+        const sill = basic("frame"), sillTop = basic("frameTop");
+        box(x0 - 4, 212, 68, 6, 7, [sill, sill, sillTop, sill, sill, sill], ZH + 6);
+        spots.push([x0 + 12, yAt(212, ZH + 3) + 0.5, ZH + 3], [x0 + 48, yAt(212, ZH + 3) + 0.5, ZH + 3]);
+        const glow = new T.Mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending }));
+        glow.scale.set(96, 80, 1); glow.position.set(x0 + 30, yAt(189, ZH + 1), ZH + 1); add(glow);
+        const reflex = rect(x0 + 3, 168, 8, 10, fixed(0xffffff, { transparent: true, opacity: 0 }), zf + 0.2);
+        return { mats, glow, reflex };
+      };
+      const W = { k: win(160, "k"), s: win(300, "s") };
+
+      // Tür
+      const dz = ZH + 0.2;
+      rect(241, 218, 38, 60, fixed(0x3a3a42), dz);
+      const doorM = basic("door"); rect(243, 220, 34, 56, doorM, dz + 0.1);
+      const panelM = basic("panel"), panelS = basic("panelStroke");
+      [[247, 224, 26, 18], [247, 248, 26, 20]].forEach(([x, y, w, h]) => { rect(x - 0.25, y - 0.25, w + 0.5, h + 0.5, panelS, dz + 0.2); rect(x, y, w, h, panelM, dz + 0.3); });
+      const knob = add(new T.Mesh(new T.CircleGeometry(2, 16), basic("knob"))); knob.position.z = dz + 0.4;
+      const doorLight = rect(243, 220, 10, 56, fixed(0x8fce92, { transparent: true, opacity: 0 }), dz + 0.35);
+      { const sill = basic("frame"), top = basic("frameTop"); box(238, 276, 44, 4, 8, [sill, sill, top, sill, sill, sill], ZH + 8); }
+      { const crv = new T.QuadraticBezierCurve3(new T.Vector3(236, yAt(218, ZH + 1), ZH + 1), new T.Vector3(260, yAt(202, ZH + 1), ZH + 1), new T.Vector3(284, yAt(218, ZH + 1), ZH + 1));
+        add(new T.Mesh(new T.TubeGeometry(crv, 20, 0.9, 6), roofEdge));
+        spots.push([260, yAt(210, ZH + 1) + 1, ZH + 2]); }
+      // Lichtschein auf dem Boden (nachts)
+      const pool = (x, sy, rx, ry, hex) => {
+        const m = add(new T.Mesh(new T.CircleGeometry(1, 28), new T.MeshBasicMaterial({ color: hex, transparent: true, opacity: 0, depthWrite: false })));
+        m.rotation.x = -Math.PI / 2; m.scale.set(rx, ry / TS, 1); m.position.set(x, 0.2, zG(sy)); return m;
+      };
+      const pools = { k: pool(190, 288, 35, 6, C.kitchen.on), s: pool(330, 288, 35, 6, C.tv.on), e: pool(260, 292, 20, 5, C.door.on) };
+
+      // ── Garten: Zaun, Büsche, Briefkasten ──
+      const ZF = zG(284), fenceM = basic("roof"), fenceTop = basic("roofTop");
+      const postH = yAt(268, ZF);
+      [95, 108, 121, 134, 386, 399, 412, 425].forEach((x) => {
+        const p = add(new T.Mesh(new T.CylinderGeometry(1.5, 1.5, postH, 8), fenceM)); p.position.set(x + 1.5, postH / 2, ZF);
+        const c = add(new T.Mesh(SPH, fenceTop)); c.scale.setScalar(2); c.position.set(x + 1.5, postH, ZF);
+        spots.push([x + 1.5, postH + 2, ZF]);
+      });
+      [95, 386].forEach((x) => { const r = new T.Mesh(BOX, [fenceM, fenceM, fenceTop, fenceM, fenceM, fenceM]); r.scale.set(42, 2.5 / TC, 1.8); r.position.set(x + 21, yAt(274.25, ZF), ZF + 0.5); add(r); });
+      const bushM = basic("bush"), bushTop = basic("bushTop");
+      [[150, 276, 18, 10], [140, 278, 12, 7], [370, 276, 18, 10], [380, 278, 12, 7]].forEach(([cx, cy, rx, ry], i) => {
+        const z = zG(cy + ry * 0.55) + (i % 2) * 3;
+        const b = add(new T.Mesh(SPH, bushM)); b.scale.set(rx, ry / TC, rx * 0.65); b.position.set(cx, yAt(cy, z), z);
+        const h = add(new T.Mesh(SPH, bushTop)); h.scale.set(rx * 0.7, ry * 0.55 / TC, rx * 0.5); h.position.set(cx - rx * 0.15, yAt(cy - ry * 0.35, z) , z + 2);
+        if (i % 2 === 0) spots.push([cx, yAt(cy - ry, z) + 0.5, z]);
+      });
+      { const z = zG(281), mb = fixed(0x4a4a55), mt = fixed(0x55555f);
+        const p = add(new T.Mesh(BOX, mb)); p.scale.set(3, yAt(258, z), 3); p.position.set(401.5, yAt(258, z) / 2, z);
+        const bx = add(new T.Mesh(BOX, [mb, mb, mt, mb, mb, mb])); bx.scale.set(14, 10 / TC, 10); bx.position.set(402, yAt(258, z), z);
+        spots.push([402, yAt(253, z) + 0.5, z]); }
+
+      // ── Bäume ──
+      const bark = toon(0x5c4030), barkDark = toon(0x4a3326);
+      const leafA = toon(0x3d6b3a), leafB = toon(0x4f8045), leafC = toon(0x5e9050);
+      const limb = (parent, x0, y0, z0, len, ang, tilt, r0, r1, mat) => {
+        const g = new T.Group(); g.position.set(x0, y0, z0); g.rotation.set(tilt, 0, ang); parent.add(g);
+        const c = new T.Mesh(new T.CylinderGeometry(r1, r0, len, 7), mat || bark); c.position.y = len / 2; g.add(c);
+        const tip = new T.Object3D(); tip.position.y = len; g.add(tip);
+        return tip;
+      };
+      // Laubbaum: Stamm, Äste (auch im Winter sichtbar), Krone aus weichen Blattballen
+      const leafTree = (x, z, h, crownR, seed) => {
+        const t = new T.Group(); t.position.set(x, 0, z); add(t);
+        let s = seed; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+        limb(t, 0, 0, 0, h * 0.62, 0, 0, h * 0.05, h * 0.035, bark);
+        const branches = [];
+        for (let i = 0; i < 6; i++) {
+          const a = (i % 2 ? 1 : -1) * (0.45 + rnd() * 0.55), y0 = h * (0.38 + i * 0.05);
+          const tip = limb(t, 0, y0, (rnd() - 0.5) * 3, h * (0.28 + rnd() * 0.14), a, (rnd() - 0.5) * 0.5, h * 0.022, h * 0.01, bark);
+          branches.push(tip);
+          for (let j = 0; j < 2; j++) limb(tip.parent, 0, h * (0.18 + j * 0.08), 0, h * (0.1 + rnd() * 0.08), (j ? 1 : -1) * (0.5 + rnd() * 0.4), 0, h * 0.01, h * 0.004, barkDark);
+        }
+        limb(t, 0, h * 0.6, 0, h * 0.25, 0.1, 0, h * 0.028, h * 0.012, bark);
+        const crown = new T.Group(); t.add(crown);
+        const cy = h * 0.72;
+        const blobs = [[0, 0.15, 0, 0.62], [-0.55, -0.1, 0.1, 0.5], [0.55, -0.05, 0, 0.52], [-0.3, 0.45, -0.1, 0.48], [0.35, 0.42, 0.1, 0.46],
+                       [0, -0.35, 0.3, 0.5], [-0.75, -0.4, -0.2, 0.36], [0.78, -0.35, 0.1, 0.38], [0.05, 0.7, 0, 0.36]];
+        blobs.forEach(([bx, by, bz, br], i) => {
+          const m = new T.Mesh(SPH, i % 3 === 0 ? leafA : i % 3 === 1 ? leafB : leafC);
+          m.scale.set(crownR * br, crownR * br * 0.9, crownR * br * 0.8); m.position.set(bx * crownR, cy + by * crownR, bz * crownR); crown.add(m);
+        });
+        return { crown, top: [x, cy + crownR * 0.9, z] };
+      };
+      const trees = [leafTree(38, -95, 150, 52, 5), leafTree(494, -100, 100, 32, 9)];
+      // Tanne vorn rechts, mit Weihnachtsschmuck (nur im Winter)
+      const fir = new T.Group(); fir.position.set(452, 0, -32); add(fir);
+      limb(fir, 0, 0, 0, 10, 0, 0, 2.6, 2.2, bark);
+      const needleA = toon(0x2c5838), needleB = toon(0x376a43);
+      const tiers = [[25, 28, 8], [21, 25, 26], [16.5, 22, 42], [11.5, 19, 56], [6.5, 15, 68]];
+      tiers.forEach(([r, h, y], i) => { const c = new T.Mesh(new T.ConeGeometry(r, h, 10), i % 2 ? needleB : needleA); c.position.y = y + h / 2; fir.add(c); });
+      const firR = (y) => { for (const [r, h, y0] of tiers) if (y >= y0 && y <= y0 + h) return r * (1 - (y - y0) / h); return 0; };
+      const deco = new T.Group(); fir.add(deco);
+      const LIGHT_COLS = [0xffd27a, 0xfff1c2, 0xffb36b, 0xffe39a];
+      const lights = [];
+      for (let i = 0; i < 44; i++) {
+        const u = i / 44, y = 12 + u * 64, a = u * Math.PI * 2 * 5.2 + 0.4, r = firR(y) * 0.92 + 0.6;
+        const m = new T.MeshBasicMaterial({ color: LIGHT_COLS[i % 4] });
+        const b = new T.Mesh(SPH, m); b.scale.setScalar(1.25); b.position.set(Math.cos(a) * r, y, Math.sin(a) * r); deco.add(b);
+        const g = new T.Mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), color: LIGHT_COLS[i % 4], transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending }));
+        g.scale.setScalar(11); g.position.copy(b.position); g.position.z += 0.8; deco.add(g);
+        lights.push({ m, g, ph: i * 2.39, base: new T.Color(LIGHT_COLS[i % 4]) });
+      }
+      const ballCols = [toon(0xc23b33), toon(0xe2b23e), toon(0xb8322c), toon(0xd9a733)];
+      [[14, 0.3], [20, 2.1], [27, 0.9], [33, 2.7], [40, 1.5], [47, 0.2], [53, 2.4], [60, 1.1], [22, -0.6], [44, -0.9]].forEach(([y, a], i) => {
+        const r = firR(y) * 0.95 + 1;
+        const b = new T.Mesh(SPH, ballCols[i % 4]); b.scale.setScalar(2.1); b.position.set(Math.cos(a) * r, y - 1.5, Math.sin(a) * r); deco.add(b);
+      });
+      const star = new T.Shape();
+      for (let i = 0; i < 10; i++) { const r = i % 2 ? 2.6 : 6, a = Math.PI / 2 + i * Math.PI / 5; i ? star.lineTo(Math.cos(a) * r, Math.sin(a) * r) : star.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
+      const starM = new T.Mesh(new T.ExtrudeGeometry(star, { depth: 1.2, bevelEnabled: false }), new T.MeshBasicMaterial({ color: 0xffd84a }));
+      starM.position.set(0, 89, -0.6); deco.add(starM);
+      const starGlow = new T.Mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), color: 0xffe08a, transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending }));
+      starGlow.scale.setScalar(26); starGlow.position.set(0, 89, 1); deco.add(starGlow);
+      spots.push([452 + firR(40) * 0.6, 42, -32 + firR(40) * 0.6]);
+
+      // ── Aktualisieren ──
+      const col = new T.Color();
+      let tPrev = null;
+      const update = (S, t, dt) => {
+        if (!S) return;
+        const k = 1 - Math.exp(-dt / 0.45);
+        for (const tn of tints) {
+          const c = S.colors[tn.key]; if (c === undefined) continue;
+          col.setStyle(c);
+          tn.m.color.lerp(col, tPrev === null ? 1 : k);
+        }
+        tPrev = t;
+        ["k", "s"].forEach((key) => {
+          const on = S[key + "On"], w = W[key];
+          w.mats.forEach((m) => { const target = on ? m.userData.onOp : 1; m.opacity += (target - m.opacity) * (tPrev === null ? 1 : k); });
+          const base = S.isDay ? (key === "k" ? 0.08 : 0.06) : (key === "k" ? 0.15 : 0.12);
+          const pulse = key === "k" ? 0.6 + 0.4 * Math.sin(t * 1.26) : 0.6 + 0.25 * Math.sin(t * 2.1) + 0.15 * Math.sin(t * 5.3);
+          w.glow.material.color.setStyle(key === "k" ? C.kitchen.on : C.tv.on);
+          w.glow.material.opacity += ((on ? base * 2.4 * pulse : 0) - w.glow.material.opacity) * k;
+          w.reflex.material.opacity = S.isDay && !on ? 0.06 : 0;
+          pools[key].material.opacity += ((on && !S.isDay ? (key === "k" ? 0.08 : 0.06) : 0) - pools[key].material.opacity) * k;
+        });
+        pools.e.material.opacity += ((S.eOn && !S.isDay ? 0.1 : 0) - pools.e.material.opacity) * k;
+        doorLight.material.opacity = S.eOn ? 0.3 : 0;
+        knob.position.x += ((S.eOn ? 251 : 269) - knob.position.x) * (knob.userData.init ? k * 1.5 : 1); knob.userData.init = true;
+        knob.position.y = yAt(252, dz + 0.4);
+        // Jahreszeit: im Winter kahle Laubbäume, Tanne geschmückt
+        trees.forEach((tr) => { tr.crown.visible = !S.winter; });
+        deco.visible = !!S.winter;
+        if (S.winter) {
+          const night = S.isDay ? 0.3 : 1;
+          lights.forEach((L) => {
+            const tw = 0.55 + 0.45 * Math.max(0, Math.sin(t * (0.9 + (L.ph % 1)) + L.ph)) ;
+            L.m.color.copy(L.base).multiplyScalar(0.55 + 0.45 * tw);
+            L.g.material.opacity = Math.min(1, 0.95 * tw * night);
+          });
+          starGlow.material.opacity = (0.35 + 0.1 * Math.sin(t * 1.7)) * (S.isDay ? 0.4 : 1);
+        }
+      };
+      return { update, spots };
+    }
+
+    let _glowTex = null;
+    function glowTex() {
+      if (_glowTex) return _glowTex;
+      const c = document.createElement("canvas"); c.width = c.height = 64;
+      const g = c.getContext("2d"), r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+      r.addColorStop(0, "rgba(255,255,255,1)"); r.addColorStop(0.35, "rgba(255,255,255,0.45)"); r.addColorStop(1, "rgba(255,255,255,0)");
+      g.fillStyle = r; g.fillRect(0, 0, 64, 64);
+      _glowTex = new window.THREE.CanvasTexture(c);
+      return _glowTex;
+    }
+
+    function Deer3D({ sleeping, light, isDayish, zzzRef, onFail, winter, scene: sceneState }) {
       const canvasRef = useRef(null);
-      const live = useRef({ sleeping, light, isDayish, winter });
-      live.current = { sleeping, light, isDayish, winter };
+      const live = useRef({ sleeping, light, isDayish, winter, scene: sceneState });
+      live.current = { sleeping, light, isDayish, winter, scene: sceneState };
 
       useEffect(() => {
         let raf = 0, disposed = false, renderer = null, ro = null;
@@ -610,9 +874,10 @@
           scene.add(amb, dir);
           const J = buildDeer3D(T);
           scene.add(J.root, J.bf);
+          const S3 = live.current.scene ? buildScene3D(T, scene) : null;
           // Schatten des Schmetterlings am Boden: Tiefen- und Höhenhinweis
           const bfShadow = new T.Mesh(new T.CircleGeometry(1, 20), new T.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthWrite: false }));
-          bfShadow.rotation.x = -Math.PI / 2; bfShadow.position.y = 0.1; scene.add(bfShadow);
+          bfShadow.rotation.x = -Math.PI / 2; bfShadow.position.y = 0.45; scene.add(bfShadow);
           // Schneewolke beim Abschütteln: kleiner Vorrat an Flocken-Kugeln
           const puffGeo = new T.SphereGeometry(1, 10, 8);
           const puffs = Array.from({ length: 22 }, () => {
@@ -675,7 +940,7 @@
           };
           // ── Schmetterling: dynamischer Flug mit Zwischenlandungen ──
           // Landeplätze in der Szene (Welt-Koordinaten, z<0 = hinter dem Reh)
-          const SCENE_SPOTS = [
+          const SCENE_SPOTS = S3 ? S3.spots : [
             [96.5, 42.5, -10], [109.5, 42.5, -10], [122.5, 42.5, -10], [135.5, 42.5, -10],     // Zaun links
             [387.5, 42.5, -10], [400.5, 42.5, -10], [413.5, 42.5, -10], [426.5, 42.5, -10],    // Zaun rechts
             [402, 55.5, -10],                                                                  // Briefkasten
@@ -1091,12 +1356,13 @@
               J.bf.rotation.set(roll * facingSign, B.yaw, pitch);
               J.bf.scale.setScalar(2.0 * (1 + c3(B.p.z, -30, 40) * 0.007));    // näher = etwas größer
               bfShadow.visible = true;
-              bfShadow.position.set(st.bf.p.x, 0.1, st.bf.p.z);
+              bfShadow.position.set(st.bf.p.x, 0.45, st.bf.p.z);
               const hgt = c3(st.bf.p.y / 160, 0, 1);
               bfShadow.scale.set(4.5 * (1 - hgt * 0.4), 2.2 * (1 - hgt * 0.4), 1);
               bfShadow.material.opacity = 0.2 * (1 - hgt) * Lv.light;
             } else { J.bf.visible = false; bfShadow.visible = false; }
 
+            if (S3) S3.update(Lv.scene, t, dt);
             // Licht nach Tageszeit
             amb.intensity = 0.62 * Lv.light; dir.intensity = 0.55 * Lv.light;
 
@@ -1326,7 +1592,7 @@
       return <canvas ref={ref} aria-hidden="true" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", borderRadius: 16 }} />;
     }
 
-    function House({ slot, slotName, date, slotIdx, showBird, deerV2, winter }) {
+    function House({ slot, slotName, date, slotIdx, showBird, deerV2, winter, scene3d }) {
       const sky = SKY[slotName];
       const kOn = isOn(slot.k), sOn = isOn(slot.s), eOn = isOn(slot.e), gOn = isOn(slot.g);
       const kErr = isError(slot.k), sErr = isError(slot.s), eErr = isError(slot.e), gErr = isError(slot.g);
@@ -1344,6 +1610,7 @@
       const deerSleeping = slotName === "Nachts";
       const [deer3dFailed, setDeer3dFailed] = useState(false);
       const use3d = deerV2 && !deer3dFailed;
+      const s3 = !!scene3d && use3d;            // 3D-Szene (Vorschau): Haus und Garten im Canvas
       const zzzRef = useRef(null);
       const sleepP = useAnimatedValue(deerSleeping ? 1 : 0, 1800);
       const deerFullyAwake = !deerSleeping && sleepP < 0.05;
@@ -1368,7 +1635,112 @@
       const kOffFill = kOn ? kFill : (isDay ? "#2a3548" : darkWin);
       const sOffFill = sOn ? sFill : (isDay ? "#2a3548" : darkWin);
       const trans = T("0.9s");
-      const snowA = useSnowAmount(!!winter);
+      const snowA = useSnowAmount(!!winter && !s3);
+
+      // Elemente, die bei der 3D-Szene in einer SVG-Ebene VOR dem Canvas liegen
+      const smokeEl = (<React.Fragment>
+              {kOn && [0,1,2].map(i => (
+                <circle key={i} cx={285+i*3} cy={75} r={3+i} fill={isDay ? "#a0a8b8" : "#8090a8"} opacity={isDay ? 0.12 : 0.08}>
+                  <animate attributeName="cy" values={(75-i*5)+";"+(50-i*8)+";"+(25-i*10)} dur={(4+i)+"s"} repeatCount="indefinite" />
+                  <animate attributeName="opacity" values={(isDay?0.12:0.1)+";"+(isDay?0.06:0.05)+";0"} dur={(4+i)+"s"} repeatCount="indefinite" />
+                  <animate attributeName="r" values={(3+i)+";"+(5+i*1.5)+";"+(8+i*2)} dur={(4+i)+"s"} repeatCount="indefinite" />
+                </circle>
+              ))}
+      </React.Fragment>);
+      const birdEl = (<React.Fragment>
+              {/* BIRD (only in extended mode) — sitzt auf dem Dach und singt */}
+              {showBird && gOn && <g transform="translate(180, 75)" style={{ transition: trans }}>
+                {/* Schwanzgefieder (nach hinten/links herausstehend) */}
+                <path d="M -7,-7 L -18,-12 L -13,-6 Z" fill={C.bird.on} opacity="0.7" />
+                <path d="M -7,-5 L -17,-2 L -12,-1 Z" fill={C.bird.on} opacity="0.55" />
+
+                {/* Körper — tropfenförmig, nach rechts blickend */}
+                <path d="M -5,-14 C -1,-19 11,-18 15,-12 C 18,-6 13,0 6,0 C -2,0 -8,-5 -6,-11 C -6,-13 -6,-14 -5,-14 Z"
+                      fill={C.bird.on} opacity="0.92" />
+
+                {/* Bauch-Highlight (leichter Schimmer) */}
+                <ellipse cx="5" cy="-4" rx="6" ry="2.5" fill="#fff" opacity="0.1" />
+
+                {/* Gefalteter Flügel */}
+                <path d="M -1,-11 C 3,-15 12,-12 12,-4 C 8,-2 1,-6 -1,-11 Z"
+                      fill={C.bird.on} opacity="0.55" />
+                <path d="M 1,-11 C 5,-13 10,-11 11,-7" stroke={C.bird.on} strokeWidth="0.6" fill="none" opacity="0.7" />
+
+                {/* Kopf */}
+                <circle cx="12" cy="-17" r="6" fill={C.bird.on} opacity="0.95" />
+
+                {/* Schnabel — spitz, leicht geöffnet (singt!) */}
+                <path d="M 17,-18 L 24,-19 L 17,-17 Z" fill="#f4a261" />
+                <path d="M 17,-16.5 L 24,-17 L 17,-15.5 Z" fill="#c76d3e" opacity="0.7" />
+
+                {/* Auge mit Highlight */}
+                <circle cx="13" cy="-18" r="1.7" fill="#1a1a2e" />
+                <circle cx="13.6" cy="-18.4" r="0.6" fill="#fff" opacity="0.9" />
+
+                {/* Musiknoten schweben nach oben und verblassen */}
+                <g fontFamily="serif" fill={C.bird.on}>
+                  <text x="27" y="-22" fontSize="15">
+                    <animate attributeName="opacity" values="0;0.9;0.9;0" dur="3s" repeatCount="indefinite" />
+                    <animate attributeName="y" values="-22;-28;-34;-40" dur="3s" repeatCount="indefinite" />
+                    {"♪"}
+                  </text>
+                  <text x="33" y="-26" fontSize="12">
+                    <animate attributeName="opacity" values="0;0;0.8;0.8;0" dur="3.6s" repeatCount="indefinite" />
+                    <animate attributeName="y" values="-26;-26;-32;-38;-44" dur="3.6s" repeatCount="indefinite" />
+                    {"♫"}
+                  </text>
+                  <text x="23" y="-28" fontSize="11">
+                    <animate attributeName="opacity" values="0;0;0;0.7;0.7;0" dur="4.2s" repeatCount="indefinite" />
+                    <animate attributeName="y" values="-28;-28;-28;-34;-40;-46" dur="4.2s" repeatCount="indefinite" />
+                    {"♬"}
+                  </text>
+                </g>
+              </g>}
+              {showBird && gErr && !gOn && <g transform="translate(180, 75)"><circle cx="0" cy="0" r="6" fill="rgba(20,20,30,0.8)" /><text x="0" y="4" textAnchor="middle" fontSize="10" fill={isFehler(slot.g)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}
+      </React.Fragment>);
+      const kErrBadge = (<React.Fragment>{kErr && <g><circle cx="157" cy="168" r="6" fill="rgba(20,20,30,0.8)" /><text x="157" y="172" textAnchor="middle" fontSize="10" fill={isFehler(slot.k)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}</React.Fragment>);
+      const sErrBadge = (<React.Fragment>{sErr && <g><circle cx="297" cy="168" r="6" fill="rgba(20,20,30,0.8)" /><text x="297" y="172" textAnchor="middle" fontSize="10" fill={isFehler(slot.s)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}</React.Fragment>);
+      const eErrBadge = (<React.Fragment>{eErr && <g><circle cx="216" cy="222" r="6" fill="rgba(20,20,30,0.8)" /><text x="216" y="226" textAnchor="middle" fontSize="10" fill={isFehler(slot.e)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}</React.Fragment>);
+      const zzzEl = (
+                <g ref={zzzRef} opacity="0" fontFamily="Georgia, 'Times New Roman', serif" fontWeight="bold">
+                  {[[6, 0, 6.5, "#b0cce0", "4s", "0s"], [1, 3, 4.6, "#98bcd4", "3.2s", "-1.8s"], [11, -3, 3.6, "#88acc4", "2.8s", "-2.5s"]].map(([x, y, fs, fill, dur, begin], i) => (
+                    <text key={i} x={x} y={y} fontSize={fs} fill={fill} textAnchor="middle">
+                      {fs > 5 ? "Z" : "z"}
+                      <animate attributeName="y" values={y + "; " + (y - 30)} dur={dur} begin={begin} repeatCount="indefinite" calcMode="spline" keySplines="0.4 0 0.6 1" />
+                      <animate attributeName="opacity" values="0; 0.85; 0.8; 0" keyTimes="0; 0.14; 0.76; 1" dur={dur} begin={begin} repeatCount="indefinite" />
+                    </text>
+                  ))}
+                </g>
+      );
+      const overlayEl = (<React.Fragment>
+            {/* FOG OVERLAY — nur bei vergangenen Slots ohne Daten */}
+            {showFog && <React.Fragment>
+              <rect width="520" height="320" fill={sky.top} opacity="0.6" style={{ transition: trans }} />
+              <ellipse cx="260" cy="210" rx="180" ry="90" fill="rgba(60,60,80,0.3)" />
+              <text x="260" y="195" textAnchor="middle" fontSize="15" fill={C.error} fontFamily={ffSerif} fontStyle="italic" opacity="0.9">Keine Verbindung</text>
+              <text x="260" y="215" textAnchor="middle" fontSize="11" fill={C.textLo} fontFamily={ff}>Wetterstation nicht erreichbar</text>
+            </React.Fragment>}
+            {/* PENDING OVERLAY — aktuelle/zukünftige Slots ohne Daten */}
+            {showPending && <React.Fragment>
+              <rect width="520" height="320" fill={sky.top} opacity="0.4" style={{ transition: trans }} />
+              <text x="260" y="200" textAnchor="middle" fontSize="14" fill={C.textLo} fontFamily={ffSerif} fontStyle="italic" opacity="0.8">Noch keine Daten</text>
+              <text x="260" y="220" textAnchor="middle" fontSize="11" fill={C.textFaint} fontFamily={ff}>Nächste Messung in Kürze</text>
+            </React.Fragment>}
+      </React.Fragment>);
+      // Zustand für die 3D-Szene: dieselben Farben wie im SVG
+      const sh = (b, f, add) => "rgb(" + b.map((v) => Math.max(0, Math.min(255, Math.round(v * f + (add || 0))))).join(", ") + ")";
+      const sceneState = s3 ? {
+        isDay, kOn, sOn, eOn, winter: !!winter,
+        colors: {
+          ground: groundColor, path: sh(groundBase, 1.12, 10), bush: sh(groundBase, 1.05), bushTop: sh(groundBase, 1.3, 6),
+          wall: wallColor, wallDark: sh(wallBase, 0.75), siding: sh(wallBase, 1, isDay ? 6 : 3),
+          roof: roofColor, roofTop: sh(roofBase, 1.12, 8), roofEdge: roofEdge, roofUnder: sh(roofBase, 0.7),
+          winBg: isDay ? "#1e2a3e" : "#1a2030", kPane: kOn ? kFill : kOffFill, sPane: sOn ? sFill : sOffFill,
+          frame: frameBright, frameTop: frameBright,
+          door: eOn ? "#5a9b5e" : eErr ? (isFehler(slot.e) ? "#7a4a3a" : "#5a4a30") : "#4a4a52",
+          panel: eOn ? "#4d8a50" : "#3e3e46", panelStroke: eOn ? "#6aaa6e" : "#555555", knob: eOn ? "#a0d0a2" : "#888888",
+        },
+      } : null;
 
       return (
         <div style={{ position: "relative", width: "100%", maxWidth: 580, margin: "0 auto" }}>
@@ -1421,6 +1793,7 @@
               <circle cx={sun.x} cy={sun.y} r="24" fill={sky.sunColor} opacity="0.12" filter="url(#sunBlur)" style={{ transition: "fill 1s" }} />
             </g>
 
+            {!s3 && <React.Fragment>
             {/* GROUND */}
             <ellipse cx="260" cy="305" rx="280" ry="30" fill={groundColor} opacity="0.8" style={{ transition: T("1s") }} />
             {winter && <SnowCover part="ground" a={snowA} slotName={slotName} />}
@@ -1436,13 +1809,7 @@
               {/* CHIMNEY */}
               <rect x="275" y="88" width="20" height="45" rx="2" fill="#4a4a55" style={{ transition: trans }} />
               <rect x="272" y="84" width="26" height="7" rx="2" fill="#5a5a62" />
-              {kOn && [0,1,2].map(i => (
-                <circle key={i} cx={285+i*3} cy={75} r={3+i} fill={isDay ? "#a0a8b8" : "#8090a8"} opacity={isDay ? 0.12 : 0.08}>
-                  <animate attributeName="cy" values={(75-i*5)+";"+(50-i*8)+";"+(25-i*10)} dur={(4+i)+"s"} repeatCount="indefinite" />
-                  <animate attributeName="opacity" values={(isDay?0.12:0.1)+";"+(isDay?0.06:0.05)+";0"} dur={(4+i)+"s"} repeatCount="indefinite" />
-                  <animate attributeName="r" values={(3+i)+";"+(5+i*1.5)+";"+(8+i*2)} dur={(4+i)+"s"} repeatCount="indefinite" />
-                </circle>
-              ))}
+              {!s3 && smokeEl}
 
               {/* ROOF */}
               <polygon points="55,148 200,62 345,148" fill={roofColor} style={{ transition: trans }} />
@@ -1472,7 +1839,7 @@
                 <path d="M102,167 Q108,175 102,189" stroke={frameBright} strokeWidth="0.4" fill="none" opacity="0.2" style={{ transition: trans }} />
                 <path d="M158,167 Q152,175 158,189" stroke={frameBright} strokeWidth="0.4" fill="none" opacity="0.2" style={{ transition: trans }} />
                 {isDay && !kOn && <rect x="103" y="168" width="8" height="10" rx="1" fill="white" opacity="0.06" />}
-                {kErr && <g><circle cx="157" cy="168" r="6" fill="rgba(20,20,30,0.8)" /><text x="157" y="172" textAnchor="middle" fontSize="10" fill={isFehler(slot.k)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}
+                {!s3 && kErrBadge}
               </g>
 
               {/* TV WINDOW */}
@@ -1492,7 +1859,7 @@
                 <path d="M242,167 Q248,175 242,189" stroke={frameBright} strokeWidth="0.4" fill="none" opacity="0.2" />
                 <path d="M298,167 Q292,175 298,189" stroke={frameBright} strokeWidth="0.4" fill="none" opacity="0.2" />
                 {isDay && !sOn && <rect x="243" y="168" width="8" height="10" rx="1" fill="white" opacity="0.06" />}
-                {sErr && <g><circle cx="297" cy="168" r="6" fill="rgba(20,20,30,0.8)" /><text x="297" y="172" textAnchor="middle" fontSize="10" fill={isFehler(slot.s)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}
+                {!s3 && sErrBadge}
               </g>
 
               {/* DOOR */}
@@ -1505,60 +1872,12 @@
                 {eOn && <React.Fragment><rect x="183" y="220" width="10" height="56" rx="1" fill="#8fce92" opacity="0.3" /><path d="M183,276 L170,290 L196,290 Z" fill={C.door.on} opacity="0.06" /></React.Fragment>}
                 <rect x="178" y="276" width="44" height="4" rx="1" fill={frameBright} style={{ transition: trans }} />
                 <path d="M176,218 Q200,210 224,218" fill="none" stroke={roofEdge} strokeWidth="1.5" style={{ transition: trans }} />
-                {eErr && <g><circle cx="216" cy="222" r="6" fill="rgba(20,20,30,0.8)" /><text x="216" y="226" textAnchor="middle" fontSize="10" fill={isFehler(slot.e)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}
+                {!s3 && eErrBadge}
               </g>
 
               {winter && <SnowCover part="house" a={snowA} slotName={slotName} />}
 
-              {/* BIRD (only in extended mode) — sitzt auf dem Dach und singt */}
-              {showBird && gOn && <g transform="translate(180, 75)" style={{ transition: trans }}>
-                {/* Schwanzgefieder (nach hinten/links herausstehend) */}
-                <path d="M -7,-7 L -18,-12 L -13,-6 Z" fill={C.bird.on} opacity="0.7" />
-                <path d="M -7,-5 L -17,-2 L -12,-1 Z" fill={C.bird.on} opacity="0.55" />
-
-                {/* Körper — tropfenförmig, nach rechts blickend */}
-                <path d="M -5,-14 C -1,-19 11,-18 15,-12 C 18,-6 13,0 6,0 C -2,0 -8,-5 -6,-11 C -6,-13 -6,-14 -5,-14 Z"
-                      fill={C.bird.on} opacity="0.92" />
-
-                {/* Bauch-Highlight (leichter Schimmer) */}
-                <ellipse cx="5" cy="-4" rx="6" ry="2.5" fill="#fff" opacity="0.1" />
-
-                {/* Gefalteter Flügel */}
-                <path d="M -1,-11 C 3,-15 12,-12 12,-4 C 8,-2 1,-6 -1,-11 Z"
-                      fill={C.bird.on} opacity="0.55" />
-                <path d="M 1,-11 C 5,-13 10,-11 11,-7" stroke={C.bird.on} strokeWidth="0.6" fill="none" opacity="0.7" />
-
-                {/* Kopf */}
-                <circle cx="12" cy="-17" r="6" fill={C.bird.on} opacity="0.95" />
-
-                {/* Schnabel — spitz, leicht geöffnet (singt!) */}
-                <path d="M 17,-18 L 24,-19 L 17,-17 Z" fill="#f4a261" />
-                <path d="M 17,-16.5 L 24,-17 L 17,-15.5 Z" fill="#c76d3e" opacity="0.7" />
-
-                {/* Auge mit Highlight */}
-                <circle cx="13" cy="-18" r="1.7" fill="#1a1a2e" />
-                <circle cx="13.6" cy="-18.4" r="0.6" fill="#fff" opacity="0.9" />
-
-                {/* Musiknoten schweben nach oben und verblassen */}
-                <g fontFamily="serif" fill={C.bird.on}>
-                  <text x="27" y="-22" fontSize="15">
-                    <animate attributeName="opacity" values="0;0.9;0.9;0" dur="3s" repeatCount="indefinite" />
-                    <animate attributeName="y" values="-22;-28;-34;-40" dur="3s" repeatCount="indefinite" />
-                    {"♪"}
-                  </text>
-                  <text x="33" y="-26" fontSize="12">
-                    <animate attributeName="opacity" values="0;0;0.8;0.8;0" dur="3.6s" repeatCount="indefinite" />
-                    <animate attributeName="y" values="-26;-26;-32;-38;-44" dur="3.6s" repeatCount="indefinite" />
-                    {"♫"}
-                  </text>
-                  <text x="23" y="-28" fontSize="11">
-                    <animate attributeName="opacity" values="0;0;0;0.7;0.7;0" dur="4.2s" repeatCount="indefinite" />
-                    <animate attributeName="y" values="-28;-28;-28;-34;-40;-46" dur="4.2s" repeatCount="indefinite" />
-                    {"♬"}
-                  </text>
-                </g>
-              </g>}
-              {showBird && gErr && !gOn && <g transform="translate(180, 75)"><circle cx="0" cy="0" r="6" fill="rgba(20,20,30,0.8)" /><text x="0" y="4" textAnchor="middle" fontSize="10" fill={isFehler(slot.g)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}
+              {!s3 && birdEl}
 
               {/* GARDEN */}
               <path d="M200,280 Q195,290 188,305 Q200,308 212,305 Q205,290 200,280" fill={groundColor} opacity={0.6 * (1 - Math.min(1, snowA * 2))} style={{ transition: trans }} />
@@ -1574,15 +1893,7 @@
               {winter && <SnowCover part="garden" a={snowA} slotName={slotName} />}
 
               {use3d ? (
-                <g ref={zzzRef} opacity="0" fontFamily="Georgia, 'Times New Roman', serif" fontWeight="bold">
-                  {[[6, 0, 6.5, "#b0cce0", "4s", "0s"], [1, 3, 4.6, "#98bcd4", "3.2s", "-1.8s"], [11, -3, 3.6, "#88acc4", "2.8s", "-2.5s"]].map(([x, y, fs, fill, dur, begin], i) => (
-                    <text key={i} x={x} y={y} fontSize={fs} fill={fill} textAnchor="middle">
-                      {fs > 5 ? "Z" : "z"}
-                      <animate attributeName="y" values={y + "; " + (y - 30)} dur={dur} begin={begin} repeatCount="indefinite" calcMode="spline" keySplines="0.4 0 0.6 1" />
-                      <animate attributeName="opacity" values="0; 0.85; 0.8; 0" keyTimes="0; 0.14; 0.76; 1" dur={dur} begin={begin} repeatCount="indefinite" />
-                    </text>
-                  ))}
-                </g>
+                s3 ? null : zzzEl
               ) : (<React.Fragment>
               {/* REH — süßes Bambi im linken Garten, steht zwischen den Blumen.
                   Bei Nachts-Slot: schläft (Körper sinkt, Beine retrahieren, Kopf legt sich vor den Körper).
@@ -1779,24 +2090,24 @@
               </React.Fragment>)}
             </g>
 
-            {/* FOG OVERLAY — nur bei vergangenen Slots ohne Daten */}
-            {showFog && <React.Fragment>
-              <rect width="520" height="320" fill={sky.top} opacity="0.6" style={{ transition: trans }} />
-              <ellipse cx="260" cy="210" rx="180" ry="90" fill="rgba(60,60,80,0.3)" />
-              <text x="260" y="195" textAnchor="middle" fontSize="15" fill={C.error} fontFamily={ffSerif} fontStyle="italic" opacity="0.9">Keine Verbindung</text>
-              <text x="260" y="215" textAnchor="middle" fontSize="11" fill={C.textLo} fontFamily={ff}>Wetterstation nicht erreichbar</text>
             </React.Fragment>}
-            {/* PENDING OVERLAY — aktuelle/zukünftige Slots ohne Daten */}
-            {showPending && <React.Fragment>
-              <rect width="520" height="320" fill={sky.top} opacity="0.4" style={{ transition: trans }} />
-              <text x="260" y="200" textAnchor="middle" fontSize="14" fill={C.textLo} fontFamily={ffSerif} fontStyle="italic" opacity="0.8">Noch keine Daten</text>
-              <text x="260" y="220" textAnchor="middle" fontSize="11" fill={C.textFaint} fontFamily={ff}>Nächste Messung in Kürze</text>
-            </React.Fragment>}
+            {!s3 && overlayEl}
           </g>
         </svg>
-        {use3d && <Deer3D sleeping={deerSleeping} isDayish={isDay || isDawn || isDusk} zzzRef={zzzRef} winter={!!winter}
+        {use3d && <Deer3D sleeping={deerSleeping} isDayish={isDay || isDawn || isDusk} zzzRef={zzzRef} winter={!!winter} scene={sceneState}
           light={isDay ? 1.12 : isDawn ? 0.9 : isDusk ? 0.72 : 0.55} onFail={() => setDeer3dFailed(true)} />}
-        {winter && <Snowfall slotName={slotName} />}
+        {winter && !s3 && <Snowfall slotName={slotName} />}
+        {s3 && <svg viewBox="0 0 520 320" fill="none" aria-hidden="true" style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
+          <g clipPath="url(#sceneClip)">
+            <g transform="translate(60, 0)">
+              {smokeEl}
+              <g transform="translate(0, -3)">{birdEl}</g>
+              {kErrBadge}{sErrBadge}{eErrBadge}
+              {zzzEl}
+            </g>
+            {overlayEl}
+          </g>
+        </svg>}
         </div>
       );
     }
@@ -2122,6 +2433,7 @@
     function DashboardMain({ history: allHistory, lastPoll, backendVersion, showBird, onToggleBird }) {
       const deer = useDeerMode(showBird);
       const [winter] = useState(winterPreviewOn);
+      const [scene3d] = useState(scenePreviewOn);
       const [week, setWeek] = useState(0);
       const [selDay, setSelDay] = useState(0);
       const [selSlot, setSelSlot] = useState(getNowSlot());
@@ -2339,7 +2651,7 @@
                 <div style={{ maxWidth: 604, margin: "0 auto", padding: mob ? "0 8px" : "0 12px" }}>
                 {/* HOUSE */}
                 <div style={{ paddingTop: mob ? 4 : 8 }}>
-                  <House slot={slot} slotName={slotName} date={day.date} slotIdx={selSlot} showBird={showBird} deerV2={deer.use3d} winter={winter} />
+                  <House slot={slot} slotName={slotName} date={day.date} slotIdx={selSlot} showBird={showBird} deerV2={deer.use3d} winter={winter} scene3d={scene3d} />
                   {deer.panel && <DeerPreviewPanel />}
                 </div>
 
