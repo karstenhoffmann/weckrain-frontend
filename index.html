@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.2.0
+  Version: 1.3.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.2.0";
+    const FRONTEND_VERSION = "1.3.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -274,7 +274,388 @@
     }
 
     // ─── HOUSE COMPONENT ─────────────────────────────────────────────────
-    function House({ slot, slotName, date, slotIdx, showBird }) {
+    // ─── REH v2 — RIG MIT GELENKEN ───────────────────────────────────────
+    // Gleiche Formen und Farben wie das bisherige Reh, aber zerlegt in
+    // Körperteile mit eigenen Drehpunkten. Eine kleine Animations-Engine
+    // (requestAnimationFrame, schreibt direkt ins SVG, kein React-Rerender)
+    // gleitet weich zwischen Posen und überlagert Kleinigkeiten wie Blinzeln,
+    // Ohrenzucken, Wedeln und Atmen.
+    //
+    // Koordinaten: Reh-lokal, Boden (Hufe) bei y=15, Kopf zeigt nach +x.
+    // Gelenk-Winkel in Grad, positiv = im Uhrzeigersinn (SVG).
+    //   Beine:  *H = Hüfte/Schulter (positiv = Bein schwingt nach hinten),
+    //           *K = Knie relativ zum Oberschenkel
+    //   neck:   Hals um (11,-3), positiv = Kopf geht nach unten (Grasen)
+    //   head:   Kopf um Schädelbasis (16,-13)
+
+    const DEER_BASE = {
+      bodyY: 0, pitch: 0, neck: 0, head: 0,
+      fH1: 0, fK1: 0, fH2: 0, fK2: 0, hH1: 0, hK1: 0, hH2: 0, hK2: 0,
+      earL: 0, earR: 3, tail: 0, eyes: 0,
+    };
+    const DEER_POSES = {
+      stand: {},
+      graze: { neck: 65, fH1: -3, fH2: 4 },
+      alert: { neck: -12, head: -6, earL: -10, earR: -8 },
+      sniff: { pitch: 3, neck: 50, head: -28, earL: -6, earR: -2, fH1: -4 },
+      lie:   { bodyY: 10, neck: 6, head: -4, fH1: 75, fK1: -155, fH2: 70, fK2: -150, hH1: -80, hK1: 155, hH2: -75, hK2: 150 },
+      sleep: { bodyY: 10, neck: 48, head: -10, fH1: 75, fK1: -155, fH2: 70, fK2: -150, hH1: -80, hK1: 155, hH2: -75, hK2: 150, earL: 18, earR: 22, eyes: 1 },
+    };
+    // Reaktionszeit pro Gelenk (Sekunden). Unterschiedliche Werte ergeben
+    // natürliches Nachschwingen: Beine zuerst, Körper, Kopf zuletzt.
+    const DEER_TAU = {
+      bodyY: 0.45, pitch: 0.4, neck: 0.55, head: 0.5,
+      fH1: 0.22, fK1: 0.22, fH2: 0.26, fK2: 0.26, hH1: 0.24, hK1: 0.24, hH2: 0.28, hK2: 0.28,
+      earL: 0.18, earR: 0.2, tail: 0.15, eyes: 0.35,
+    };
+    // Aktionen des Zufalls-Verhaltens: [Pose, Dauer min, max (s), Gewicht]
+    const DEER_ACTIONS = {
+      idle:  ["stand", 4, 9, 3],
+      graze: ["graze", 7, 14, 3],
+      look:  ["alert", 3, 6, 2],
+      sniff: ["sniff", 3, 5, 2],
+      rest:  ["lie", 25, 50, 0.6],
+    };
+
+    const lerpPose = (name) => Object.assign({}, DEER_BASE, DEER_POSES[name] || {});
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const rnd = (a, b) => a + Math.random() * (b - a);
+
+    // Vorwärts-Kinematik: Punkt im Kopf-Koordinatensystem → Reh-lokal
+    function deerHeadPoint(p, x, y) {
+      const rot = (px, py, cx, cy, deg) => {
+        const a = deg * Math.PI / 180, dx = px - cx, dy = py - cy;
+        return [cx + dx * Math.cos(a) - dy * Math.sin(a), cy + dx * Math.sin(a) + dy * Math.cos(a)];
+      };
+      let [px, py] = rot(x, y, 16, -13, p.head);
+      [px, py] = rot(px, py, 11, -3, p.neck);
+      [px, py] = rot(px, py, -2, -3, p.pitch);
+      return [px, py + p.bodyY];
+    }
+
+    function DeerLeg({ legRef, kneeRef, x, color }) {
+      return (
+        <g ref={legRef} transform={`translate(${x}, 2)`}>
+          <rect x="-1.3" y="0" width="2.6" height="7.4" rx="1.3" fill={color} />
+          <g ref={kneeRef} transform="translate(0, 6.5)">
+            <rect x="-1.3" y="-0.6" width="2.6" height="7.1" rx="1.3" fill={color} />
+            <ellipse cx="0" cy="6.5" rx="1.6" ry="0.9" fill="#3a2416" />
+          </g>
+        </g>
+      );
+    }
+
+    function DeerRig({ sleeping, filter, isDayish }) {
+      const R = useRef({});
+      const ref = (k) => (el) => { R.current[k] = el; };
+
+      useEffect(() => {
+        const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        const st = {
+          cur: lerpPose(sleeping ? "sleep" : "stand"),
+          action: sleeping ? "sleep" : "idle", actionEnd: 0, look: null,
+          imp: { earL: [], earR: [], tail: [], head: [] },
+          nextEar: 0, nextTail: 0, nextBlink: 0, blinkT: -1,
+          bf: null, nextBf: 0, forced: null, t0: performance.now(), last: performance.now(),
+          sleeping, isDayish,
+        };
+        R.current.st = st;
+
+        const now = () => (performance.now() - st.t0) / 1000;
+        const pickAction = (t) => {
+          const keys = Object.keys(DEER_ACTIONS);
+          const total = keys.reduce((s, k) => s + DEER_ACTIONS[k][3], 0);
+          let r = Math.random() * total, k = keys[0];
+          for (const kk of keys) { r -= DEER_ACTIONS[kk][3]; if (r <= 0) { k = kk; break; } }
+          if (k === st.action && k !== "idle") k = "idle";
+          setAction(k, t);
+        };
+        const setAction = (k, t, dur) => {
+          st.action = k;
+          const a = DEER_ACTIONS[k];
+          st.actionEnd = t + (dur || (a ? rnd(a[1], a[2]) : 6));
+          st.look = k === "look" ? [rnd(25, 90), rnd(-70, -35)] : null;
+        };
+        const impulse = (ch, amp, freq, decay) => st.imp[ch].push({ t: now(), amp, freq, decay });
+        const impVal = (ch, t) => {
+          let v = 0;
+          st.imp[ch] = st.imp[ch].filter((i) => t - i.t < 3);
+          for (const i of st.imp[ch]) {
+            const a = t - i.t;
+            v += i.amp * Math.exp(-a * i.decay) * Math.sin(a * i.freq);
+          }
+          return v;
+        };
+
+        // Schmetterling: fliegt heran, umkreist das Reh, landet kurz auf der Nase
+        const startButterfly = (t) => {
+          st.bf = { x: 150, y: -70, vx: 0, vy: 0, phase: "in", tPhase: t, wp: 0, landed: false };
+        };
+        const BF_WAYPOINTS = [[95, -55], [55, -40], [20, -55], [45, -28]];
+
+        // API für die Vorschau-Steuerung
+        window.__deerApi = {
+          trigger: (name) => {
+            const t = now();
+            st.forced = null;
+            if (name === "butterfly") { startButterfly(t); setAction("idle", t, 30); return; }
+            if (name === "sleep") { st.forced = "sleep"; return; }
+            if (name === "auto") { setAction("idle", t, 2); return; }
+            setAction(name, t, name === "rest" ? 30 : 10);
+          },
+          state: () => ({ action: st.forced || st.action }),
+        };
+
+        let raf;
+        const frame = () => {
+          raf = requestAnimationFrame(frame);
+          const pnow = performance.now();
+          const dt = Math.min((pnow - st.last) / 1000, 0.1);
+          st.last = pnow;
+          const t = now();
+
+          // ── Verhalten ──
+          const asleep = st.sleeping || st.forced === "sleep";
+          if (!asleep && !reduce && t > st.actionEnd) pickAction(t);
+          if (!asleep && !reduce && st.isDayish && !st.bf && t > st.nextBf) {
+            if (st.nextBf > 0) startButterfly(t);
+            st.nextBf = t + rnd(70, 150);
+          }
+
+          let poseName = asleep ? "sleep" : (DEER_ACTIONS[st.action] || ["stand"])[0];
+          if (reduce && !asleep) poseName = "stand";
+          const target = lerpPose(poseName);
+
+          // Schmetterling bewegen
+          const bf = st.bf;
+          if (bf) {
+            const nose = deerHeadPoint(st.cur, 29.5, -12.8);
+            let tx, ty;
+            if (bf.phase === "in") {
+              [tx, ty] = BF_WAYPOINTS[bf.wp];
+              if (Math.hypot(tx - bf.x, ty - bf.y) < 6) {
+                bf.wp++;
+                if (bf.wp >= BF_WAYPOINTS.length) { bf.phase = "land"; bf.tPhase = t; }
+              }
+            } else if (bf.phase === "land") {
+              [tx, ty] = [nose[0], nose[1] - 2];
+              if (Math.hypot(tx - bf.x, ty - bf.y) < 1.2) {
+                bf.phase = "sit"; bf.tPhase = t;
+                impulse("earL", -18, 26, 4); impulse("earR", -14, 24, 4);
+              }
+            } else if (bf.phase === "sit") {
+              [tx, ty] = [nose[0], nose[1] - 2];
+              if (t - bf.tPhase > 3.5) {
+                bf.phase = "out"; bf.tPhase = t;
+                impulse("head", 6, 22, 3);
+              }
+            } else {
+              [tx, ty] = [-90, -110];
+              if (bf.x < -80) st.bf = null;
+            }
+            if (st.bf) {
+              if (bf.phase === "sit") { bf.x = tx; bf.y = ty; }
+              else {
+                const speed = bf.phase === "land" ? 14 : 26;
+                const dx = tx - bf.x, dy = ty - bf.y, d = Math.hypot(dx, dy) || 1;
+                bf.vx += ((dx / d) * speed - bf.vx) * Math.min(dt * 2.2, 1);
+                bf.vy += ((dy / d) * speed - bf.vy) * Math.min(dt * 2.2, 1);
+                bf.x += bf.vx * dt + Math.sin(t * 5.3) * 0.25;
+                bf.y += bf.vy * dt + Math.sin(t * 7.1) * 0.35;
+              }
+              if (!asleep && bf.phase !== "out") st.look = [bf.x, bf.y];
+              else if (bf.phase === "out" && t - bf.tPhase < 1.6) st.look = [bf.x, bf.y];
+              else if (bf.phase === "out") st.look = null;
+            }
+          }
+
+          // Blickziel → Hals + Kopf
+          if (st.look && !asleep) {
+            const nx = 11, ny = -3 + st.cur.bodyY;
+            const phi = Math.atan2(st.look[1] - ny, st.look[0] - nx) * 180 / Math.PI;
+            let r = phi + 27.7;
+            if (st.look[0] < nx - 4) r = clamp(r, -40, 20);
+            const neck = clamp(r * 0.62, -32, 70);
+            target.neck = neck + (poseName === "lie" ? 0 : 0);
+            target.head = clamp(r - neck, -26, 24);
+            target.earL = Math.min(target.earL, -6); target.earR = Math.min(target.earR, -4);
+          }
+
+          // Kleine Zufälligkeiten (Ohren, Wedel, Blinzeln)
+          if (!reduce) {
+            if (t > st.nextEar) {
+              if (st.nextEar > 0 && !asleep) Math.random() < 0.5 ? impulse("earL", -16, 28, 5) : impulse("earR", -14, 26, 5);
+              if (st.nextEar > 0 && asleep && Math.random() < 0.3) impulse("earR", -8, 22, 4);
+              st.nextEar = t + rnd(2.5, 8);
+            }
+            if (t > st.nextTail) {
+              if (st.nextTail > 0 && !asleep) impulse("tail", -22, 30, 4);
+              st.nextTail = t + rnd(3, 10);
+            }
+          }
+          if (!asleep && t > st.nextBlink) {
+            st.blinkT = t;
+            st.nextBlink = t + (Math.random() < 0.2 ? 0.35 : rnd(2.5, 6.5));
+          }
+
+          // Pose weich annähern
+          const c = st.cur;
+          for (const k in DEER_BASE) {
+            const tau = DEER_TAU[k] * (asleep ? 1.6 : 1);
+            c[k] += (target[k] - c[k]) * (1 - Math.exp(-dt / tau));
+          }
+
+          // Überlagerungen
+          const chew = st.action === "graze" && !asleep && c.neck > 50 ? Math.sin(t * 5.2) * 1.6 + Math.sin(t * 1.3) * 1.2 : 0;
+          const snf = st.action === "sniff" && !asleep ? Math.max(0, Math.sin(t * 1.7)) * Math.sin(t * 19) * 1.4 : 0;
+          const breathe = Math.sin(t * (asleep ? 1.6 : 2.2));
+          const neck = c.neck + chew;
+          const head = c.head + snf + impVal("head", t);
+          const earL = c.earL + impVal("earL", t);
+          const earR = c.earR + impVal("earR", t);
+          const tail = c.tail + impVal("tail", t);
+          const blink = st.blinkT >= 0 && t - st.blinkT < 0.14 ? 1 : 0;
+          const eyesClosed = Math.max(c.eyes, blink);
+
+          // ── In SVG schreiben ──
+          const E = R.current, set = (k, v) => { if (E[k]) E[k].setAttribute("transform", v); };
+          set("body", `translate(0, ${c.bodyY.toFixed(2)}) rotate(${c.pitch.toFixed(2)}, -2, -3)`);
+          set("breath", `translate(-2, -3) scale(1, ${(1 + breathe * (asleep ? 0.022 : 0.012)).toFixed(4)}) translate(2, 3)`);
+          set("neck", `rotate(${neck.toFixed(2)}, 11, -3)`);
+          set("head", `rotate(${head.toFixed(2)}, 16, -13)`);
+          set("earL", `translate(17, -24) rotate(${earL.toFixed(2)})`);
+          set("earR", `translate(19, -22) rotate(${earR.toFixed(2)})`);
+          set("tail", `translate(-17, -6.8) rotate(${tail.toFixed(2)})`);
+          const legs = [["hl1", "hk1", -12.7, c.hH1, c.hK1], ["hl2", "hk2", -8.2, c.hH2, c.hK2], ["fl1", "fk1", 7.3, c.fH1, c.fK1], ["fl2", "fk2", 11.8, c.fH2, c.fK2]];
+          for (const [l, k, x, h, kn] of legs) {
+            set(l, `translate(${x}, ${(2 + c.bodyY).toFixed(2)}) rotate(${h.toFixed(2)})`);
+            set(k, `translate(0, 6.5) rotate(${kn.toFixed(2)})`);
+          }
+          if (E.eyeOpen) E.eyeOpen.setAttribute("opacity", (1 - eyesClosed).toFixed(3));
+          if (E.eyeClosed) E.eyeClosed.setAttribute("opacity", eyesClosed.toFixed(3));
+          if (E.zzz) E.zzz.setAttribute("opacity", clamp((c.eyes - 0.6) / 0.4, 0, 1).toFixed(3));
+          if (E.shadow) E.shadow.setAttribute("opacity", (0.28 - clamp(c.bodyY / 10, 0, 1) * 0.1).toFixed(3));
+          if (E.bf) {
+            if (st.bf) {
+              const flap = st.bf.phase === "sit" ? 0.55 + 0.45 * Math.cos(t * 2.2) : Math.abs(Math.cos(t * 26));
+              const dir = st.bf.vx < -0.5 ? -1 : 1;
+              E.bf.setAttribute("transform", `translate(${st.bf.x.toFixed(2)}, ${st.bf.y.toFixed(2)}) scale(${dir}, 1)`);
+              E.bf.setAttribute("opacity", "1");
+              if (E.bfWings) E.bfWings.setAttribute("transform", `scale(${Math.max(flap, 0.15).toFixed(3)}, 1)`);
+            } else E.bf.setAttribute("opacity", "0");
+          }
+        };
+        raf = requestAnimationFrame(frame);
+        return () => { cancelAnimationFrame(raf); if (window.__deerApi) delete window.__deerApi; };
+      }, []);
+
+      // Props-Änderungen (Slot-Wechsel) an die laufende Engine weitergeben
+      useEffect(() => {
+        const st = R.current.st;
+        if (!st) return;
+        st.sleeping = sleeping; st.isDayish = isDayish;
+        if (sleeping) st.bf = null;
+      }, [sleeping, isDayish]);
+
+      const zzz = (x, y, size, fill, dur, begin, to) => (
+        <text x={x} y={y} fontSize={size} fill={fill} textAnchor="middle">
+          {size > 5 ? "Z" : "z"}
+          <animate attributeName="y" values={`${y}; ${to}`} dur={dur} begin={begin} repeatCount="indefinite" calcMode="spline" keySplines="0.4 0 0.6 1" />
+          <animate attributeName="opacity" values="0; 0.85; 0.8; 0" keyTimes="0; 0.14; 0.76; 1" dur={dur} begin={begin} repeatCount="indefinite" />
+        </text>
+      );
+
+      return (
+        <g transform="translate(65, 293)" style={{ filter, transition: "filter 1.2s cubic-bezier(0.4, 0, 0.2, 1)" }}>
+          <ellipse ref={ref("shadow")} cx="-2" cy="15" rx="19" ry="2.2" fill="#000" opacity="0.28" />
+
+          {/* Beine hinter dem Körper: ferne Beine minimal dunkler für Tiefe */}
+          <DeerLeg legRef={ref("hl2")} kneeRef={ref("hk2")} x={-8.2} color="#7d5036" />
+          <DeerLeg legRef={ref("fl2")} kneeRef={ref("fk2")} x={11.8} color="#7d5036" />
+          <DeerLeg legRef={ref("hl1")} kneeRef={ref("hk1")} x={-12.7} color="#8b5a3c" />
+          <DeerLeg legRef={ref("fl1")} kneeRef={ref("fk1")} x={7.3} color="#8b5a3c" />
+
+          <g ref={ref("body")}>
+            <g ref={ref("breath")}>
+              <ellipse cx="-2" cy="-3" rx="17" ry="8" fill="#a6724a" />
+              <ellipse cx="-2" cy="3" rx="13" ry="3.5" fill="#f5e6c4" opacity="0.9" />
+              <circle cx="-10" cy="-7" r="1.4" fill="#fff" opacity="0.75" />
+              <circle cx="-5" cy="-9" r="1.2" fill="#fff" opacity="0.7" />
+              <circle cx="0" cy="-7.5" r="1.3" fill="#fff" opacity="0.75" />
+              <circle cx="5" cy="-9" r="1.2" fill="#fff" opacity="0.65" />
+              <circle cx="9" cy="-5" r="1" fill="#fff" opacity="0.6" />
+              <circle cx="-13" cy="-4" r="0.9" fill="#fff" opacity="0.55" />
+              <circle cx="-7" cy="-4" r="0.8" fill="#fff" opacity="0.5" />
+              <ellipse cx="-17" cy="-4" rx="2.5" ry="3.5" fill="#fff" opacity="0.80" />
+            </g>
+            <g ref={ref("tail")} transform="translate(-17, -6.8)">
+              <path d="M 0,0 C -2,-0.5 -2,-5.5 0,-5.5 C 2,-5.5 2,-0.5 0,0 Z" fill="#fff" />
+            </g>
+
+            <g ref={ref("neck")}>
+              <path d="M 8,-6 Q 13,-11 17,-13 L 21,-11 Q 16,-6 11,-3 Z" fill="#a6724a" />
+              <g ref={ref("head")}>
+                <path d="M 14,-22 Q 20,-26 25,-22 Q 29,-18 29,-13 Q 28,-9 24,-9 Q 19,-10 15,-12 Q 12,-15 13,-20 Z" fill="#a6724a" />
+                <ellipse cx="19" cy="-14" rx="2.5" ry="2" fill="#c2875f" opacity="0.55" />
+                <ellipse cx="27" cy="-12.5" rx="3.2" ry="2.4" fill="#c9956b" />
+                <ellipse cx="28.5" cy="-12.2" rx="1" ry="0.8" fill="#1a1a1a" />
+                <circle cx="28.7" cy="-12.5" r="0.32" fill="#fff" opacity="0.6" />
+                <g ref={ref("eyeOpen")}>
+                  <ellipse cx="21" cy="-16.5" rx="1.6" ry="2" fill="#1a1a1a" />
+                  <circle cx="21.5" cy="-17.1" r="0.65" fill="#fff" />
+                  <circle cx="21" cy="-15.8" r="0.28" fill="#fff" opacity="0.8" />
+                </g>
+                <path ref={ref("eyeClosed")} d="M 19.2,-16.5 Q 21,-14.8 22.8,-16.5" stroke="#1a1a1a" strokeWidth="1.3" fill="none" strokeLinecap="round" opacity="0" />
+                <g ref={ref("earL")} transform="translate(17, -24)">
+                  <ellipse cx="0" cy="-4.5" rx="1.8" ry="4.5" fill="#8b5a3c" />
+                  <ellipse cx="0" cy="-4" rx="1" ry="3.2" fill="#c2875f" opacity="0.9" />
+                </g>
+                <g ref={ref("earR")} transform="translate(19, -22)">
+                  <ellipse cx="0" cy="-6.5" rx="2.3" ry="6.5" fill="#a6724a" />
+                  <ellipse cx="0" cy="-6" rx="1.4" ry="4.8" fill="#e0a88a" />
+                </g>
+              </g>
+            </g>
+
+            <g ref={ref("zzz")} opacity="0" fontFamily="Georgia, 'Times New Roman', serif" fontWeight="bold">
+              {zzz(35, -10, 5.5, "#b0cce0", "4s", "0s", -38)}
+              {zzz(31, -8, 4, "#98bcd4", "3.2s", "-1.8s", -30)}
+              {zzz(40, -13, 3.2, "#88acc4", "2.8s", "-2.5s", -33)}
+            </g>
+          </g>
+
+          {/* Schmetterling (Reh-lokale Koordinaten, wird von der Engine bewegt) */}
+          <g ref={ref("bf")} opacity="0">
+            <g ref={ref("bfWings")}>
+              <path d="M 0,0 C -1.5,-3.2 -4.2,-3.6 -4,-1.2 C -3.8,0.4 -1.6,0.6 0,0 Z" fill="#f4c96b" />
+              <path d="M 0,0 C 1.5,-3.2 4.2,-3.6 4,-1.2 C 3.8,0.4 1.6,0.6 0,0 Z" fill="#f0b45e" />
+              <path d="M 0,0.2 C -1.2,1.6 -2.8,2.4 -2.6,1.2 C -2.4,0.4 -1,0.2 0,0.2 Z" fill="#e9a35a" />
+              <path d="M 0,0.2 C 1.2,1.6 2.8,2.4 2.6,1.2 C 2.4,0.4 1,0.2 0,0.2 Z" fill="#e39a54" />
+            </g>
+            <rect x="-0.25" y="-1.6" width="0.5" height="3.2" rx="0.25" fill="#4a3a2a" />
+          </g>
+        </g>
+      );
+    }
+
+    // Vorschau-Steuerung (nur mit ?mode=karsten&deer=v2)
+    function DeerPreviewPanel() {
+      const btn = (label, name) => (
+        <button key={name} onClick={() => window.__deerApi && window.__deerApi.trigger(name)} style={{
+          background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: C.textLo,
+          borderRadius: 8, padding: "6px 10px", fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+        }}>{label}</button>
+      );
+      return (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", margin: "10px 0 4px" }}>
+          <span style={{ fontSize: 11, color: C.textFaint, width: "100%", textAlign: "center", letterSpacing: 1 }}>REH-VORSCHAU</span>
+          {[["Automatisch", "auto"], ["Stehen", "idle"], ["Grasen", "graze"], ["Umschauen", "look"], ["Schnuppern", "sniff"],
+            ["Liegen", "rest"], ["Schlafen", "sleep"], ["Schmetterling", "butterfly"]].map(([l, n]) => btn(l, n))}
+        </div>
+      );
+    }
+
+    function House({ slot, slotName, date, slotIdx, showBird, deerV2 }) {
       const sky = SKY[slotName];
       const kOn = isOn(slot.k), sOn = isOn(slot.s), eOn = isOn(slot.e), gOn = isOn(slot.g);
       const kErr = isError(slot.k), sErr = isError(slot.s), eErr = isError(slot.e), gErr = isError(slot.g);
@@ -512,6 +893,7 @@
               <rect x="340" y="258" width="3" height="22" fill="#4a4a55" />
               <rect x="335" y="253" width="14" height="10" rx="2" fill="#4a4a55" />
 
+              {deerV2 ? <DeerRig sleeping={deerSleeping} isDayish={isDay || isDawn || isDusk} filter={isDay ? "brightness(1.15) saturate(1.05)" : isDawn ? "brightness(0.9) saturate(0.95)" : isDusk ? "brightness(0.72) saturate(0.9)" : "brightness(0.55) saturate(0.75)"} /> : (<React.Fragment>
               {/* REH — süßes Bambi im linken Garten, steht zwischen den Blumen.
                   Bei Nachts-Slot: schläft (Körper sinkt, Beine retrahieren, Kopf legt sich vor den Körper).
                   sleepP=0 (wach) → sleepP=1 (schläft), animiert via useAnimatedValue (1800ms).
@@ -704,6 +1086,7 @@
                   </g>
                 </g>
               </g>
+              </React.Fragment>)}
             </g>
 
             {/* FOG OVERLAY — nur bei vergangenen Slots ohne Daten */}
@@ -984,7 +1367,22 @@
     }
 
     // ─── MAIN DASHBOARD ──────────────────────────────────────────────────
+    // Reh v2 (Vorschau): nur im Karsten-Modus mit ?deer=v2, bleibt per localStorage aktiv.
+    // ?deer=v1 schaltet zurück.
+    function useDeerV2(showBird) {
+      const [on] = useState(() => {
+        try {
+          const q = new URLSearchParams(window.location.search).get("deer");
+          if (q === "v2") localStorage.setItem("wetter_deer", "v2");
+          if (q === "v1") localStorage.removeItem("wetter_deer");
+          return localStorage.getItem("wetter_deer") === "v2";
+        } catch (e) { return false; }
+      });
+      return on && showBird;
+    }
+
     function DashboardMain({ history, lastPoll, backendVersion, showBird, onToggleBird }) {
+      const deerV2 = useDeerV2(showBird);
       const [selDay, setSelDay] = useState(0);
       const [selSlot, setSelSlot] = useState(getNowSlot());
       const mob = useIsMobile();
@@ -1103,7 +1501,8 @@
                 <div style={{ maxWidth: 604, margin: "0 auto", padding: mob ? "0 8px" : "0 12px" }}>
                 {/* HOUSE */}
                 <div style={{ paddingTop: mob ? 4 : 8 }}>
-                  <House slot={slot} slotName={slotName} date={day.date} slotIdx={selSlot} showBird={showBird} />
+                  <House slot={slot} slotName={slotName} date={day.date} slotIdx={selSlot} showBird={showBird} deerV2={deerV2} />
+                  {deerV2 && <DeerPreviewPanel />}
                 </div>
 
                 {/* LEGEND (Bars-Zeile) */}
