@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.22.0
+  Version: 1.23.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.22.0";
+    const FRONTEND_VERSION = "1.23.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -1253,9 +1253,10 @@
             st.actionEnd = t + (dur || (a ? r3(a[1], a[2]) : 6));
             st.look = null; st.destX = null; st.sitNext = t + r3(2.5, 4);
             if (k === "walk") {
-              let d = r3(D3.RANGE[0], D3.RANGE[1]);
-              if (Math.abs(d - st.x) < 30) d = st.x < (D3.RANGE[0] + D3.RANGE[1]) / 2 ? st.x + r3(35, 70) : st.x - r3(35, 70);
-              st.destX = c3(d, D3.RANGE[0], D3.RANGE[1]);
+              const R = st.litRange || D3.RANGE;       // im Dunkeln nur im Lichtkegel der Laterne
+              let d = r3(R[0], R[1]);
+              if (Math.abs(d - st.x) < 30) d = st.x < (R[0] + R[1]) / 2 ? st.x + r3(25, 55) : st.x - r3(25, 55);
+              st.destX = c3(d, R[0], R[1]);
             }
             if (k === "viewer") st.look = { viewer: true };
             if (k === "back") st.look = { back: true };
@@ -1369,7 +1370,17 @@
             st.last = pnow;
             const t = now();
             const Lv = live.current;
-            const asleep = Lv.sleeping || st.forced === "sleep";
+            // Im Dunkeln (Laterne an) bleibt das Reh im beleuchteten Bereich; liegt es beim Einschlafen außerhalb,
+            // läuft es erst in den Lichtkegel und legt sich dort hin.
+            st.litRange = S3 && S3.lamp.on() > 0.5 ? [108, 200] : null;
+            let asleep = Lv.sleeping || st.forced === "sleep";
+            if (st.toLight && (st.destX === null || st.action !== "walk")) st.toLight = false;
+            if (asleep && st.litRange && (st.toLight || st.x < st.litRange[0] - 3 || st.x > st.litRange[1] + 3)) {
+              asleep = false;      // erst bis ins Licht laufen, dann hinlegen
+              if (!st.toLight) { setAction("walk", t, 20); st.destX = c3(st.x, st.litRange[0] + 12, st.litRange[1] - 12); st.toLight = true; }
+            } else if (!asleep && st.litRange && st.action !== "walk" && !st.curious && (st.x < st.litRange[0] - 3 || st.x > st.litRange[1] + 3)) {
+              setAction("walk", t, 20); st.destX = c3(st.x, st.litRange[0] + 12, st.litRange[1] - 12);
+            }
             if (asleep && st.bf) { st.bf = null; }
             if ((Lv.winter || Lv.noBf) && st.bf) st.bf = null;   // im Winter und Spätherbst keine Schmetterlinge
             // Schnee sammelt sich auf dem Rücken; ab und zu schüttelt sich das Reh
