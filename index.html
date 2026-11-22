@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.8.0
+  Version: 1.9.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.8.0";
+    const FRONTEND_VERSION = "1.9.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -493,30 +493,65 @@
         if (side > 0) { J.spotEar = grp(0, 10.2, 0); flick.add(J.spotEar); }  // Landeplatz Ohrspitze
       });
 
-      // Schmetterling (eigenes Objekt in der Welt)
+      // ── Schmetterling: echtes 3D-Modell ──
+      // Körperachse = lokale x (Kopf vorn), Flügel nach ±z, oben = +y.
+      // Flügelschlag = Drehung um die Körperachse (0° = flach offen, 90° = hochgeklappt).
       const bf = grp();
-      const wingShape = (pts) => {
-        const s = new T.Shape(); s.moveTo(0, 0);
-        s.bezierCurveTo(pts[0], pts[1], pts[2], pts[3], pts[4], pts[5]);
-        s.bezierCurveTo(pts[6], pts[7], pts[8], pts[9], 0, 0);
-        return new T.ShapeGeometry(s, 16);
+      const bfBodyG = grp(); bf.add(bfBodyG);
+      const bm = new T.MeshBasicMaterial({ color: 0x2a1a10 });
+      const sp = (rx, ry, rz, x, y, z) => { const o = new T.Mesh(SPH, bm); o.scale.set(rx, ry, rz); o.position.set(x, y, z); return o; };
+      bfBodyG.add(sp(0.62, 0.5, 0.5, 0.25, 0, 0));          // Brust
+      bfBodyG.add(sp(1.35, 0.36, 0.36, -1.25, -0.08, 0));   // Hinterleib
+      bfBodyG.add(sp(0.38, 0.38, 0.38, 0.98, 0.06, 0));     // Kopf
+      [1, -1].forEach((sd) => {                             // Fühler mit Kolben
+        const a = new T.Mesh(new T.CylinderGeometry(0.05, 0.05, 2.2, 5), bm);
+        a.position.set(1.65, 0.85, sd * 0.32); a.rotation.set(sd * rad(18), 0, -rad(55)); bfBodyG.add(a);
+        bfBodyG.add(sp(0.14, 0.14, 0.14, 2.45, 1.48, sd * 0.62));
+      });
+      // Flügelformen (2D: X entlang Körper, Y nach außen)
+      const shape = (pts) => {
+        const s = new T.Shape(); s.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i += 3) s.bezierCurveTo(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], pts[i + 2][0], pts[i + 2][1]);
+        return new T.ShapeGeometry(s, 20);
       };
-      const wMat = (c) => new T.MeshBasicMaterial({ color: c, side: T.DoubleSide });
+      const FORE = [[0.5, 0], [1.7, 0.6], [2.9, 3.3], [1.5, 4.6], [0.4, 4.9], [-1.0, 3.3], [-0.6, 1.2], [-0.5, 0.6], [-0.4, 0.2], [0.5, 0]];
+      const HIND = [[-0.1, 0], [-0.3, 1.5], [-2.7, 3.3], [-3.0, 2.0], [-3.2, 0.7], [-1.7, 0.1], [-0.1, 0]];
+      const grow = (pts, f, dx) => pts.map(([x, y]) => [x * f + (dx || 0), y * f]);
+      // Alle Flügelschichten liegen in einer Ebene; die Reihenfolge regelt ein Tiefenversatz,
+      // damit sie von oben und unten gleich aussehen (Rand hinten, Muster vorn).
+      const wm = (off) => new T.MeshBasicMaterial({ side: T.DoubleSide, polygonOffset: true, polygonOffsetFactor: off, polygonOffsetUnits: off * 4 });
+      const BFM = { edge: wm(3), fore: wm(2), hind: wm(2), dot: wm(0), tip: wm(0), eye: wm(0), eyeIn: wm(-1) };
       const wings = [];
       [1, -1].forEach((side) => {
-        const pivot = grp(); bf.add(pivot);
-        const up = new T.Mesh(wingShape([side * 1.5, 3.4, side * 4.6, 3.9, side * 4.3, 1.2, side * 4.1, -0.5, side * 1.7, -0.6]), wMat(0xf2782f));
-        const lo = new T.Mesh(wingShape([side * 1.3, -1.8, side * 3, -2.6, side * 2.8, -1.3, side * 2.6, -0.4, side * 1.1, -0.2]), wMat(0xe8662a));
-        const edge = new T.Mesh(wingShape([side * 1.7, 3.8, side * 5.0, 4.3, side * 4.7, 1.3, side * 4.5, -0.7, side * 1.9, -0.8]), wMat(0x3a1c0c));
-        edge.position.z = -0.02;
-        const dot = new T.Mesh(new T.CircleGeometry(0.45, 12), wMat(0x2a1408)); dot.position.set(side * 2.6, 1.9, 0.02);
-        const tip = new T.Mesh(new T.CircleGeometry(0.35, 12), wMat(0xfff6dc)); tip.position.set(side * 3.6, 2.3, 0.02);
-        pivot.add(edge, up, lo, dot, tip);
-        wings.push([pivot, side]);
+        const hinge = grp(); hinge.scale.z = side; bf.add(hinge);   // links gespiegelt
+        const flat = grp(); flat.rotation.x = Math.PI / 2; hinge.add(flat); // 2D-Y → 3D-z
+        const add = (geo, m, z, x, y) => { const o = new T.Mesh(geo, m); o.position.set(x || 0, y || 0, z); flat.add(o); return o; };
+        add(shape(grow(FORE, 1.07, 0.02)), BFM.edge, 0);
+        add(shape(grow(HIND, 1.08, -0.02)), BFM.edge, 0);
+        add(shape(HIND), BFM.hind, 0);
+        add(shape(FORE), BFM.fore, 0);
+        add(new T.CircleGeometry(0.42, 14), BFM.dot, 0, 0.75, 2.6);
+        add(new T.CircleGeometry(0.3, 12), BFM.dot, 0, 0.1, 1.7);
+        add(new T.CircleGeometry(0.36, 12), BFM.tip, 0, 1.2, 4.1);
+        add(new T.CircleGeometry(0.62, 16), BFM.eye, 0, -1.9, 2.0);
+        add(new T.CircleGeometry(0.34, 14), BFM.eyeIn, 0, -1.9, 2.0);
+        wings.push([hinge, side]);
       });
-      const bfBody = new T.Mesh(new T.CylinderGeometry(0.3, 0.25, 3.6, 8), new T.MeshBasicMaterial({ color: 0x2a1a10 }));
-      bf.add(bfBody);
-      bf.scale.setScalar(2.2);
+      // Arten: [Vorderflügel, Hinterflügel, Rand, Punkte, Spitzenfleck, Augenfleck, Augen-Innen]
+      J.bfPalettes = [
+        [0xf2782f, 0xe8662a, 0x3a1c0c, 0x2a1408, 0xfff6dc, 0xe8662a, 0xe8662a],   // Kleiner Fuchs
+        [0xf6e04e, 0xefd43f, 0xb89a1e, 0xf09a2a, 0xf6e04e, 0xefd43f, 0xefd43f],   // Zitronenfalter
+        [0x7fb2ff, 0x6a9cf2, 0x263a6e, 0x263a6e, 0xffffff, 0x6a9cf2, 0x6a9cf2],   // Bläuling
+        [0xc0472e, 0xb23f2a, 0x3a1810, 0x2a1008, 0xf5e6c8, 0x3a5ec0, 0xf2d24a],   // Tagpfauenauge
+        [0xf7f3ea, 0xefe9dc, 0x8a8478, 0x2a2622, 0x2a2622, 0xefe9dc, 0xefe9dc],   // Kohlweißling
+        [0xfaf8f0, 0xf3f0e6, 0x9a948a, 0x3a3430, 0xf28a2a, 0xf3f0e6, 0xf3f0e6],   // Aurorafalter
+      ];
+      J.setBfPalette = (i) => {
+        const p = J.bfPalettes[i % J.bfPalettes.length];
+        ["fore", "hind", "edge", "dot", "tip", "eye", "eyeIn"].forEach((k, j) => BFM[k].color.setHex(p[j]));
+      };
+      J.setBfPalette(0);
+      bf.scale.setScalar(2.0);
       bf.visible = false;
       J.bf = bf; J.bfWings = wings;
       return J;
@@ -621,10 +656,10 @@
           };
           // Weltposition eines Landeplatzes (Reh-Plätze bewegen sich mit)
           const spotPos = (sp, out) => {
-            if (sp.scene) return out.set(sp.scene[0], sp.scene[1] + 4, sp.scene[2]);
-            if (sp.deer === "nose") { J.nose.getWorldPosition(out); return out.add(new T.Vector3(0, 5.6, 2.4)); }
-            if (sp.deer === "back") { J.spotBack.getWorldPosition(out); return out.add(new T.Vector3(0, 3.8, 1.5)); }
-            J.spotEar.getWorldPosition(out); return out.add(new T.Vector3(0, 3.4, 1.5));
+            if (sp.scene) return out.set(sp.scene[0], sp.scene[1] + 1.4, sp.scene[2]);
+            if (sp.deer === "nose") { J.nose.getWorldPosition(out); return out.add(new T.Vector3(0, 2.2, 0.4)); }
+            if (sp.deer === "back") { J.spotBack.getWorldPosition(out); return out.add(new T.Vector3(0, 1.6, 0.8)); }
+            J.spotEar.getWorldPosition(out); return out.add(new T.Vector3(0, 1.4, 0.6));
           };
           const planVisit = (bf) => {
             bf.queue = [];
@@ -632,13 +667,29 @@
             for (let i = 0; i < n; i++) bf.queue.push({ pt: wanderPt() });
             bf.queue.push({ spot: pickSpot() });
           };
+          // Landen: Zustand setzen, Reh reagiert, ggf. Neugier wecken
+          const landOn = (bf, spot, t, asleep) => {
+            bf.queue.shift(); bf.mode = "sit"; bf.tMode = t; bf.spot = spot;
+            bf.sitFor = spot.deer ? r3(3, 5.5) : r3(3, 8);
+            if (spot.deer === "nose") { impulse("earL", -18, 26, 4); impulse("earR", -14, 24, 4); }
+            if (spot.deer === "back") impulse("tail", -28, 30, 4);
+            const sp = spot.scene;
+            if (sp && sp[1] < 60 && !asleep && st.action !== "rest" && Math.random() < 0.5 &&
+                sp[0] > D3.RANGE[0] - 25 && sp[0] < D3.RANGE[1] + 25) {
+              const side = sp[0] > st.x ? -1 : 1;
+              st.curious = { x: c3(sp[0] + side * 24, D3.RANGE[0], D3.RANGE[1]) };
+              setAction("walk", t, 15); st.destX = st.curious.x;
+            }
+          };
           const startButterfly = (t) => {
             const fromRight = Math.random() < 0.5;
             const bf = {
               p: new T.Vector3(fromRight ? 560 : -40, r3(120, 240), r3(-10, 18)), v: new T.Vector3(),
               mode: "fly", tMode: t, stops: 0, maxStops: 1 + Math.floor(Math.random() * 4), exitRight: Math.random() < 0.5,
-              queue: [], spot: null, sitFor: 0, noise: Math.random() * 100,
+              queue: [], spot: null, sitFor: 0, noise: Math.random() * 100, yaw: fromRight ? Math.PI : 0, sitYaw: 0,
             };
+            st.bfPal = ((st.bfPal === undefined ? Math.floor(Math.random() * 6) : st.bfPal) + 1 + Math.floor(Math.random() * 4)) % 6;
+            J.setBfPalette(st.bfPal);
             planVisit(bf);
             st.bf = bf; st.watch = true; st.nextWatch = t + r3(3, 6);
           };
@@ -653,6 +704,8 @@
 
           window.__deerApi = {
             pos: () => st.x,
+            dbg: () => ({ mode: st.bf && st.bf.mode, spot: st.bf && st.bf.spot && (st.bf.spot.deer || "scene"), q: st.bf && st.bf.queue.length,
+              neckYaw: Math.round(st.cur.neckYaw), headYaw: Math.round(st.cur.headYaw), action: st.action, look: st.look && Object.keys(st.look)[0] }),
             trigger: (name) => {
               const t = now(); st.forced = null;
               if (name === "butterfly") return startButterfly(t);
@@ -735,6 +788,13 @@
                 else spotPos(step.spot, tgt);
                 const d = tgt.clone().sub(bf.p), dist = d.length() || 1;
                 const landing = !!step.spot;
+                // Letztes Stück zum Landeplatz: weich direkt folgen (das Ziel kann sich bewegen)
+                if (landing && dist < 9) {
+                  bf.p.lerp(tgt, 1 - Math.exp(-dt / 0.22));
+                  bf.v.multiplyScalar(Math.exp(-dt / 0.2));
+                  if (!bf.appr) bf.appr = t;
+                  if (bf.p.distanceTo(tgt) < 2 || t - bf.appr > 1.5) { bf.appr = 0; landOn(bf, step.spot, t, asleep); }
+                } else {
                 const speed = landing ? 8 + 26 * c3(dist / 40, 0, 1) : 30;
                 bf.v.lerp(d.multiplyScalar(speed / dist), Math.min(dt * (landing && dist < 20 ? 4 : 2.2), 1));
                 bf.p.addScaledVector(bf.v, dt);
@@ -748,21 +808,11 @@
                   const away = bf.p.clone().sub(hp), dd = away.length();
                   if (dd < 15 && dd > 0.01) bf.p.addScaledVector(away.normalize(), (15 - dd) * 0.25);
                 }
-                if (step.exit && (bf.p.x < -40 || bf.p.x > 560)) st.bf = null;
-                else if (landing && dist < 1.3) {
-                  bf.queue.shift(); bf.mode = "sit"; bf.tMode = t; bf.spot = step.spot;
-                  bf.sitFor = step.spot.deer ? r3(3, 5.5) : r3(3, 8);
-                  if (step.spot.deer === "nose") { impulse("earL", -18, 26, 4); impulse("earR", -14, 24, 4); }
-                  if (step.spot.deer === "back") impulse("tail", -28, 30, 4);
-                  // Neugier: tiefer Platz in Reichweite → hinlaufen und schnuppern
-                  const sp = step.spot.scene;
-                  if (sp && sp[1] < 60 && !asleep && st.action !== "rest" && Math.random() < 0.5 &&
-                      sp[0] > D3.RANGE[0] - 25 && sp[0] < D3.RANGE[1] + 25) {
-                    const side = sp[0] > st.x ? -1 : 1;
-                    st.curious = { x: c3(sp[0] + side * 24, D3.RANGE[0], D3.RANGE[1]) };
-                    setAction("walk", t, 15); st.destX = st.curious.x;
-                  }
-                } else if (!landing && dist < 7) bf.queue.shift();
+                }
+                if (bf.mode === "sit") { /* gerade gelandet */ }
+                else if (step.exit && (bf.p.x < -40 || bf.p.x > 560)) st.bf = null;
+                else if (landing && dist < 1.3) landOn(bf, step.spot, t, asleep);
+                else if (!landing && dist < 7) bf.queue.shift();
               } else bf.queue.push({ exit: true });
               // Hinschauen: meistens, ab und zu wendet sich das Reh ab
               if (st.bf) {
@@ -811,6 +861,13 @@
                   target.neck = c3(-elev * 0.6, -32, 66); target.head = c3(-elev * 0.4, -24, 24);
                 }
               }
+            }
+
+            // Schmetterling sitzt auf der Nase: Kopf im Profil, Reh schielt auf die Nasenspitze
+            const onNose = st.bf && st.bf.mode === "sit" && st.bf.spot && st.bf.spot.deer === "nose";
+            if (onNose && !asleep) {
+              target.neckYaw = -8; target.headYaw = -6; target.neck = -10; target.head = 6; target.headRoll = 4;
+              target.earL = -14; target.earR = -14;
             }
 
             // Zufälligkeiten
@@ -893,6 +950,7 @@
             const sac = st.sac;
             let gx = sac.tx, gy = sac.ty;
             if (st.look && !st.look.viewer) { gx = gx * 0.4 + 0.25; gy = gy * 0.4 + c3(-(target.neck + target.head) / 90, -0.3, 0.3); }
+            if (onNose) { gx = 0.42; gy = -0.12; }   // schielt nach vorn zur Nasenspitze
             if (st.look && st.look.viewer) { gx *= 0.3; gy *= 0.3; }
             sac.x += (gx - sac.x) * (1 - Math.exp(-dt / 0.045));
             sac.y += (gy - sac.y) * (1 - Math.exp(-dt / 0.045));
@@ -910,14 +968,26 @@
             if (st.bf) {
               J.bf.visible = true;
               J.bf.position.copy(st.bf.p);
-              const sitting = st.bf.mode === "sit";
-              // Sitzend: Flügel nach oben zusammengeklappt, ab und zu langsam geöffnet
-              const open = sitting ? Math.max(0, Math.sin(t * 0.9)) ** 3 : 0;
-              const flap = sitting ? rad(84 - 40 * open) : rad(10 + 65 * (0.5 + 0.5 * Math.sin(t * 24)));
-              J.bfWings.forEach(([pv, side]) => { pv.rotation.y = side * flap; });
-              if (sitting) J.bf.rotation.set(0, rad(78), 0);
-              else J.bf.rotation.set(rad(-18), st.bf.v.x < -0.5 ? rad(30) : rad(-30), 0);
-              J.bf.scale.setScalar(2.2 * (1 + c3(st.bf.p.z, -30, 40) * 0.007));    // näher = etwas größer
+              const B = st.bf, sitting = B.mode === "sit";
+              // Flügel: im Flug kräftiger Schlag, sitzend hochgeklappt und ab und zu langsam geöffnet
+              const open = sitting ? Math.pow(Math.max(0, Math.sin((t - B.tMode) * 0.8 - 1.2)), 2) * (B.spot && B.spot.deer ? 0.3 : 1) : 0;
+              const flapDeg = sitting ? 86 - 72 * open : 8 + 74 * (0.5 + 0.5 * Math.sin(t * 22));
+              J.bfWings.forEach(([hinge]) => { hinge.rotation.x = -rad(flapDeg); });
+              // Ausrichtung: Kopf in Flugrichtung (Gier weich nachgeführt). Comic-Kniff:
+              // im Flug leicht zum Betrachter gekippt, damit die Flügel gut sichtbar sind.
+              let yawT;
+              if (sitting) {
+                if (B.tMode !== B.sitSet) { B.sitSet = B.tMode; B.sitYaw = Math.cos(B.yaw) >= 0 ? rad(r3(-25, -5)) : Math.PI + rad(r3(5, 25)); }
+                yawT = B.sitYaw;
+              } else yawT = Math.atan2(-B.v.z * 0.6, B.v.x || 0.001);
+              let dy = yawT - B.yaw; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI;
+              B.yaw += dy * (1 - Math.exp(-dt / (sitting ? 0.25 : 0.18)));
+              const facingSign = Math.cos(B.yaw) >= 0 ? 1 : -1;
+              const roll = sitting ? (B.spot && B.spot.deer ? 0 : rad(28) * open) : rad(38);
+              const pitch = sitting ? 0 : c3(B.v.y / 60, -0.4, 0.5) + 0.12;
+              J.bf.rotation.order = "YZX";
+              J.bf.rotation.set(roll * facingSign, B.yaw, pitch);
+              J.bf.scale.setScalar(2.0 * (1 + c3(B.p.z, -30, 40) * 0.007));    // näher = etwas größer
               bfShadow.visible = true;
               bfShadow.position.set(st.bf.p.x, 0.1, st.bf.p.z);
               const hgt = c3(st.bf.p.y / 160, 0, 1);
