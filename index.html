@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.17.0
+  Version: 1.18.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.17.0";
+    const FRONTEND_VERSION = "1.18.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -738,13 +738,6 @@
         spots.push([x + 1.5, postH + 2, ZF]);
       });
       [95, 386].forEach((x) => { const r = new T.Mesh(BOX, [fenceM, fenceM, fenceTop, fenceM, fenceM, fenceM]); r.scale.set(42, 2.5 / TC, 1.8); r.position.set(x + 21, yAt(274.25, ZF), ZF + 0.5); add(r); });
-      const bushM = basic("bush"), bushTop = basic("bushTop");
-      [[150, 276, 18, 10], [140, 278, 12, 7], [370, 276, 18, 10], [380, 278, 12, 7]].forEach(([cx, cy, rx, ry], i) => {
-        const z = zG(cy + ry * 0.55) + (i % 2) * 3;
-        const b = add(new T.Mesh(SPH, bushM)); b.scale.set(rx, ry / TC, rx * 0.65); b.position.set(cx, yAt(cy, z), z);
-        const h = add(new T.Mesh(SPH, bushTop)); h.scale.set(rx * 0.7, ry * 0.55 / TC, rx * 0.5); h.position.set(cx - rx * 0.15, yAt(cy - ry * 0.35, z) , z + 2);
-        if (i % 2 === 0) spots.push([cx, yAt(cy - ry, z) + 0.5, z]);
-      });
       { const z = zG(281), mb = fixed(0x4a4a55), mt = fixed(0x55555f);
         const p = add(new T.Mesh(BOX, mb)); p.scale.set(3, yAt(258, z), 3); p.position.set(401.5, yAt(258, z) / 2, z);
         const bx = add(new T.Mesh(BOX, [mb, mb, mt, mb, mb, mb])); bx.scale.set(14, 10 / TC, 10); bx.position.set(402, yAt(258, z), z);
@@ -759,11 +752,16 @@
         const tip = new T.Object3D(); tip.position.y = len; g.add(tip);
         return tip;
       };
-      // Laubbaum, natürlich gewachsen: Stamm teilt sich rekursiv in immer dünnere, leicht gebogene Äste
-      // (Querschnitt bleibt etwa erhalten, Leonardo-Regel). Alle Äste in einem Mesh. Blätter als viele
-      // kleine Einzelblätter (InstancedMesh, Farbe je Blatt), Dichte und Farben je Jahreszeit.
-      const LEAF_GEO = (() => { const s = new T.Shape(); s.moveTo(0, -1); s.quadraticCurveTo(0.75, -0.15, 0, 1); s.quadraticCurveTo(-0.75, -0.15, 0, -1); return new T.ShapeGeometry(s, 4); })();
+      // Cartoon-Bäume im Toon-Stil des Rehs: dicker, geschwungener Stamm mit Wurzelansatz, wenige kräftige Äste,
+      // Krone aus runden Blattballen. Jeder Ballen ist dicht mit großen, schuppig überlappenden Blättern bedeckt
+      // (InstancedMesh, Farbe je Blatt: oben/vorn gelbgrün hell, unten/innen bläulich-grün dunkel).
+      const LEAF_GEO = (() => {
+        const s = new T.Shape(); s.moveTo(0, -1);
+        s.bezierCurveTo(0.95, -0.85, 0.95, 0.45, 0, 1); s.bezierCurveTo(-0.95, 0.45, -0.95, -0.85, 0, -1);
+        return new T.ShapeGeometry(s, 6);
+      })();
       const leafMat = new T.MeshToonMaterial({ color: 0xffffff, gradientMap: grad, side: T.DoubleSide });
+      const barkM = toon(0x8a5a3a), barkLight = toon(0x9c6a46);
       const tubeMesh = (segs, sides) => {
         const pos = [], nor = [], idx = [], up = new T.Vector3(0, 1, 0), side = new T.Vector3(1, 0, 0);
         for (const [a, b, r0, r1] of segs) {
@@ -787,80 +785,120 @@
         g.setAttribute("position", new T.Float32BufferAttribute(pos, 3)); g.setAttribute("normal", new T.Float32BufferAttribute(nor, 3)); g.setIndex(idx);
         return g;
       };
-      const leafTree = (x, z, h, seed, opt) => {
+      // Gebogener Ast als Kette kurzer Segmente entlang einer quadratischen Kurve
+      const bend = (segs, a, ctrl, b, r0, r1, n) => {
+        const crv = new T.QuadraticBezierCurve3(a, ctrl, b);
+        let prev = crv.getPoint(0);
+        for (let i = 1; i <= n; i++) { const p = crv.getPoint(i / n); segs.push([prev, p, r0 + (r1 - r0) * (i - 1) / n, r0 + (r1 - r0) * i / n]); prev = p; }
+      };
+      // Blattballen: Blätter auf der Kugeloberfläche, Spitze leicht nach unten-außen, wie Schuppen
+      const clumpLeaves = (list, c, R, n, sz, rnd) => {
+        const golden = Math.PI * (3 - Math.sqrt(5));
+        for (let i = 0; i < n; i++) {
+          const y = 1 - 2 * (i + 0.5) / n, rr = Math.sqrt(1 - y * y), a = i * golden;
+          const nrm = new T.Vector3(Math.cos(a) * rr, y, Math.sin(a) * rr);
+          if (nrm.z < -0.45) continue;                                  // Rückseite sieht niemand
+          const pos = c.clone().addScaledVector(nrm, R * (0.93 + rnd() * 0.1));
+          let tip = new T.Vector3(0, -1, 0).addScaledVector(nrm, nrm.y);   // Richtung „nach unten“ auf der Oberfläche
+          if (tip.lengthSq() < 1e-3) tip.set(1, 0, 0); tip.normalize();
+          tip.multiplyScalar(-1).lerp(nrm, 0.45).normalize();           // Spitze nach außen gekippt
+          const face = nrm.clone().addScaledVector(tip, -tip.dot(nrm)).normalize();
+          const x = tip.clone().cross(face).normalize();
+          const m = new T.Matrix4().makeBasis(x, tip, x.clone().cross(tip).normalize());
+          m.scale(new T.Vector3(sz * (0.85 + rnd() * 0.3), sz * (0.85 + rnd() * 0.3), 1)).setPosition(pos);
+          list.push({ m, p: pos, lit: 0.5 + 0.35 * nrm.y + 0.25 * nrm.z + (rnd() - 0.5) * 0.15 });
+        }
+      };
+      const finishLeaves = (parent, list, rnd) => {
+        for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
+        const mesh = new T.InstancedMesh(LEAF_GEO, leafMat, list.length);
+        list.forEach((L, i) => { mesh.setMatrixAt(i, L.m); mesh.setColorAt(i, new T.Color(0x6ab845)); });
+        mesh.instanceMatrix.needsUpdate = true; parent.add(mesh);
+        return mesh;
+      };
+      const cartoonTree = (x, z, seed, opt) => {
         const t = new T.Group(); t.position.set(x, 0, z); add(t);
         let s = seed; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
-        const segs = [], tips = [];
-        const grow = (p, dir, len, r, depth) => {
-          let cur = p.clone(), d = dir.clone();
+        const segs = [], twigs = [], V = (a, b, c) => new T.Vector3(a, b, c);
+        const H = opt.h, R0 = opt.r;
+        // Stamm: unten breit, leicht geschwungen
+        bend(segs, V(0, -2, 0), V(opt.sway * H * 0.25, H * 0.2, 0), V(opt.sway * H * 0.08, H * 0.45, 0), R0, R0 * 0.62, 6);
+        // Wurzelansatz
+        [[-1, 0.3], [1, 0.2], [-0.3, 1], [0.5, 0.9]].forEach(([dx, dz]) =>
+          bend(segs, V(0, R0 * 1.6, 0), V(dx * R0 * 1.1, R0 * 0.3, dz * R0 * 0.6), V(dx * R0 * 2.1, -0.5, dz * R0 * 1.2), R0 * 0.55, R0 * 0.18, 3));
+        const top = V(opt.sway * H * 0.08, H * 0.45, 0);
+        const leaves = [], balls = [];
+        opt.clumps.forEach(([cx, cy, cz, R], i) => {
+          const c = V(cx * H, cy * H, cz * H), RR = R * H;
+          // Hauptast vom Stamm in den Ballen
+          const from = top.clone().add(V(0, -H * (0.04 + 0.05 * (i % 3)), 0));
+          bend(segs, from, from.clone().lerp(c, 0.5).add(V(0, -RR * 0.25, 0)), c.clone().add(V(0, -RR * 0.15, 0)), R0 * 0.5, R0 * 0.22, 5);
+          // feine Zweige im Ballen (sichtbar, wenn er sich lichtet): wachsen nach oben-außen und teilen sich zweimal
+          const twig = (p, dir, len, r, lvl) => {
+            const d = dir.clone().add(V((rnd() - 0.5) * 0.5, 0.25, (rnd() - 0.5) * 0.25)).normalize();
+            const e = p.clone().addScaledVector(d, len);
+            bend(twigs, p, p.clone().lerp(e, 0.5).add(V((rnd() - 0.5) * len * 0.2, len * 0.08, 0)), e, r, r * 0.6, 2);
+            if (lvl > 0) for (let q = 0; q < 2; q++) {
+              const nd = d.clone().applyAxisAngle(V(0, 0, 1), (q ? 1 : -1) * (0.35 + rnd() * 0.35));
+              twig(e, nd, len * (0.62 + rnd() * 0.12), r * 0.6, lvl - 1);
+            }
+          };
+          const base = c.clone().add(V(0, -RR * 0.15, 0)), outward = c.clone().sub(top).setZ(0).normalize();
           for (let k = 0; k < 3; k++) {
-            const wob = depth >= opt.depth - 1 ? 0.12 : 0.3;      // Stamm fast gerade, Zweige verspielter
-            d.add(new T.Vector3((rnd() - 0.5) * wob, (rnd() - 0.5) * 0.15 + opt.up, (rnd() - 0.5) * wob * 0.4)).normalize();
-            d.x += (opt.lean || 0) * 0.02 * (opt.depth - depth); d.normalize();
-            const nxt = cur.clone().addScaledVector(d, len / 3);
-            segs.push([cur, nxt, r * (1 - k * 0.08), r * (1 - (k + 1) * 0.08)]);
-            cur = nxt;
+            const dir = outward.clone().applyAxisAngle(V(0, 0, 1), (k - 1) * 0.55).add(V(0, 0.6, 0)).normalize();
+            twig(base, dir, RR * 0.55, R0 * 0.2, 2);
           }
-          const rEnd = r * 0.76;
-          if (depth === 0 || rEnd < opt.minR) { tips.push(cur.clone()); return; }
-          if (depth <= 2) tips.push(cur.clone());
-          const n = depth >= opt.depth - 1 ? 2 : (rnd() < 0.55 ? 2 : 3);
-          for (let i = 0; i < n; i++) {
-            const leader = i === 0;
-            const ang = leader ? (rnd() - 0.5) * 0.35 : (0.38 + rnd() * 0.4) * (i % 2 ? 1 : -1) * (rnd() < 0.8 ? 1 : -1);
-            // Seitenäste fächern vor allem in der Bildebene auf (gut lesbare Silhouette)
-            const az = (rnd() - 0.5) * 0.9;
-            const nd = d.clone().applyAxisAngle(new T.Vector3(Math.sin(az), 0, Math.cos(az)), ang);
-            nd.z *= 0.55; nd.normalize();
-            if (nd.y < -0.15) nd.y = -0.15, nd.normalize();
-            const share = leader ? 0.78 : 0.58 + rnd() * 0.08;
-            grow(cur, nd, len * (leader ? 0.8 : 0.66 + rnd() * 0.14), rEnd * share / 0.76 * 0.76, depth - 1);
-          }
-        };
-        grow(new T.Vector3(0, -2, 0), new T.Vector3(0, 1, 0), h * opt.trunk, h * opt.r, opt.depth);
-        const wood = new T.Mesh(tubeMesh(segs, 6), bark); t.add(wood);
-        // Blätter rund um die Zweigspitzen
-        const pts = [];
-        tips.forEach((tp) => { for (let i = 0; i < opt.perTip; i++) pts.push(tp.clone().add(new T.Vector3((rnd() - 0.5) * opt.spread, (rnd() - 0.4) * opt.spread * 0.9, (rnd() - 0.5) * opt.spread * 0.6))); });
-        for (let i = pts.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [pts[i], pts[j]] = [pts[j], pts[i]]; }   // gemischt → Teilmenge = zufällige Auswahl
-        const leaves = new T.InstancedMesh(LEAF_GEO, leafMat, pts.length);
-        const o = new T.Object3D();
-        pts.forEach((p, i) => {
-          o.position.copy(p); o.rotation.set((rnd() - 0.5) * 1.6, (rnd() - 0.5) * 1.6, rnd() * Math.PI * 2);
-          o.scale.setScalar(opt.leaf * (0.75 + rnd() * 0.5)); o.updateMatrix(); leaves.setMatrixAt(i, o.matrix);
-          leaves.setColorAt(i, new T.Color(0x4f8c45));
+          const ball = new T.Mesh(SPH, toon(0x2e6b45)); ball.scale.set(RR * 0.95, RR * 0.9, RR * 0.85); ball.position.copy(c); t.add(ball); balls.push(ball);
+          clumpLeaves(leaves, c, RR, Math.round(RR * RR * 0.42), RR * 0.3, rnd);
         });
-        leaves.instanceMatrix.needsUpdate = true; t.add(leaves);
-        return { group: t, leaves, pts, rnd, x, z, blossom: opt.blossom, n: pts.length };
+        t.add(new T.Mesh(tubeMesh(segs, 8), barkM));
+        t.add(new T.Mesh(tubeMesh(twigs, 5), barkLight));
+        const mesh = finishLeaves(t, leaves, rnd);
+        return { group: t, leaves: mesh, list: leaves, pts: leaves.map((L) => L.p), balls, rnd, x, z, blossom: opt.blossom, n: leaves.length };
       };
       const trees = [
-        leafTree(48, -92, 150, 5, { trunk: 0.3, r: 0.034, depth: 6, minR: 0.3, perTip: 16, spread: 17, leaf: 3.3, up: 0.1, lean: 0.4 }),
-        leafTree(492, -100, 100, 9, { trunk: 0.32, r: 0.03, depth: 5, minR: 0.25, perTip: 16, spread: 14, leaf: 3.0, up: 0.1, lean: -0.3, blossom: true }),
+        cartoonTree(58, -92, 5, { h: 150, r: 6.5, sway: 0.18, clumps: [[0.02, 0.78, 0, 0.21], [-0.24, 0.62, 0.05, 0.17], [0.26, 0.64, 0.02, 0.17], [-0.12, 0.92, -0.04, 0.15], [0.17, 0.9, 0.06, 0.14], [0.36, 0.5, 0.08, 0.11], [-0.33, 0.46, 0.04, 0.11]] }),
+        cartoonTree(488, -100, 9, { h: 100, r: 4.5, sway: -0.2, blossom: true, clumps: [[-0.04, 0.78, 0, 0.22], [-0.28, 0.62, 0.05, 0.16], [0.22, 0.64, 0.02, 0.17], [0.02, 0.98, -0.02, 0.15]] }),
       ];
-      // Jahreszeiten: Blattdichte, Farben, fallende Blätter pro Sekunde, Blätter am Boden zu Beginn
+      // Büsche im selben Stil (immergrün)
+      [[150, 276, 18, 10], [140, 278, 12, 7], [370, 276, 18, 10], [380, 278, 12, 7]].forEach(([cx, cy, rx, ry], i) => {
+        const z = zG(cy + ry * 0.55) + (i % 2) * 3;
+        const g = new T.Group(); g.position.set(cx, 0, z); add(g);
+        let sd = 31 + i * 7; const rnd = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
+        const R = ry / TC * 1.05, list = [];
+        [[0, 0], [-rx * 0.5, -0.15], [rx * 0.5, -0.12]].forEach(([dx, dy], k) => {
+          const r = k ? R * 0.72 : R, c = new T.Vector3(dx, r * 0.75 + dy * R, 0);
+          const b = new T.Mesh(SPH, toon(0x1f4a33)); b.scale.set(r * 0.95, r * 0.85, r * 0.8); b.position.copy(c); g.add(b);
+          clumpLeaves(list, c, r, Math.round(r * r * 0.9), r * 0.36, rnd);
+        });
+        const mesh = finishLeaves(g, list, rnd);
+        list.forEach((L, k) => { const c = new T.Color(0x3f7a40); c.offsetHSL(0.03 * (0.5 - L.lit), 0, (L.lit - 0.55) * 0.3); mesh.setColorAt(k, c); });
+        mesh.instanceColor.needsUpdate = true;
+        if (i % 2 === 0) spots.push([cx, R * 1.6, z]);
+      });
+      // Jahreszeiten: Blattdichte, Farben (hell → dunkel wird je Blatt aus seiner Lage abgeleitet),
+      // Grundfarbe der Ballen, fallende Blätter pro Sekunde, Blätter am Boden zu Beginn
       const SEASON = {
-        fruehling:   { dens: 0.75, cols: [0x8cc65a, 0x9fd36a, 0x7ab84e, 0xa8d872], bloom: [0xf8dbe6, 0xffffff, 0xf3c6d6], fall: 0, ground: 0 },
-        sommer:      { dens: 1, cols: [0x356e34, 0x3f7a3a, 0x4a8640, 0x2f6533, 0x58934a], fall: 0.03, ground: 0 },
-        herbst:      { dens: 0.92, cols: [0x6f8f3a, 0x8aa03a, 0xc9a227, 0xe0a030, 0xe08a2a, 0xd06a28, 0xc8502a, 0xa83a26], fall: 0.5, ground: 70 },
-        spaetherbst: { dens: 0.32, cols: [0xd98a2a, 0xc45a26, 0xa8402a, 0xd9b040, 0x9a6a34, 0xb84a2a], fall: 1.3, ground: 190 },
-        winter:      { dens: 0, cols: [0x8a6a3a], fall: 0, ground: 0 },
+        fruehling:   { dens: 0.85, cols: [0x8cc45a, 0x9ccf68, 0x7db552], ball: 0x467f3e, bloom: [0xf9d3e0, 0xffffff, 0xf5bfd2], fall: 0, ground: 0 },
+        sommer:      { dens: 1, cols: [0x5f9e48, 0x4f8f45, 0x6fac52, 0x478640], ball: 0x24563a, fall: 0.03, ground: 0 },
+        herbst:      { dens: 0.95, cols: [0x7f9c3a, 0xc9a52e, 0xd98c2e, 0xcf6c2c, 0xbb4e2a, 0xa63c2a], ball: 0x6e3e22, fall: 0.5, ground: 70 },
+        spaetherbst: { dens: 0.3, cols: [0xd18a2e, 0xbf6229, 0xa8452a, 0xc9a23e], ball: null, fall: 1.3, ground: 190 },
+        winter:      { dens: 0, cols: [0x9a6a34], ball: null, fall: 0, ground: 0 },
       };
       let seasonNow = null;
       const applySeason = (name) => {
         const P = SEASON[name] || SEASON.sommer;
         trees.forEach((tr) => {
           const c = new T.Color();
-          let y0 = 1e9, y1 = -1e9; tr.pts.forEach((p) => { y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); });
-          for (let i = 0; i < tr.n; i++) {
-            const r = tr.rnd(), p = tr.pts[i];
-            // Tiefe in der Krone: unten und hinten etwas dunkler, oben vorn heller
-            const shade = -0.1 * (1 - (p.y - y0) / Math.max(1, y1 - y0)) - (p.z < 0 ? 0.05 : 0) + (tr.rnd() - 0.5) * 0.06;
-            if (tr.blossom && P.bloom && r < 0.3) c.setHex(P.bloom[Math.floor(tr.rnd() * P.bloom.length)]);
-            else c.setHex(P.cols[Math.floor(tr.rnd() * P.cols.length)]).offsetHSL(0, 0, shade);
+          tr.list.forEach((L, i) => {
+            if (tr.blossom && P.bloom && tr.rnd() < 0.3) c.setHex(P.bloom[Math.floor(tr.rnd() * P.bloom.length)]).offsetHSL(0, 0, (L.lit - 0.6) * 0.15);
+            // dunkle Blätter leicht ins Bläuliche, helle ins Gelbe
+            else c.setHex(P.cols[Math.floor(tr.rnd() * P.cols.length)]).offsetHSL(0.035 * (0.5 - L.lit), 0, (L.lit - 0.55) * 0.32);
             tr.leaves.setColorAt(i, c);
-          }
+          });
           tr.leaves.instanceColor.needsUpdate = true;
           tr.leaves.count = Math.round(tr.n * P.dens);
+          tr.balls.forEach((b) => { b.visible = P.ball !== null && P.dens >= 0.6; if (P.ball !== null) b.material.color.setHex(P.ball); });
         });
         // Laub am Boden: meist unter den Bäumen, einzeln auf der Wiese
         groundN = 0;
