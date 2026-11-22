@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.16.0
+  Version: 1.17.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.16.0";
+    const FRONTEND_VERSION = "1.17.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -599,6 +599,24 @@
       } catch (e) { return false; }
     }
 
+    // Jahreszeit der 3D-Szene: nach Datum, zum Testen ?jahreszeit=fruehling|sommer|herbst|spaetherbst|winter (auto = Datum).
+    // ?winter=1 erzwingt Winter. Weihnachtsschmuck vom 1. Dezember bis 6. Januar (bei erzwungenem Winter immer).
+    const SEASONS = ["fruehling", "sommer", "herbst", "spaetherbst", "winter"];
+    function seasonInfo() {
+      let forced = null;
+      try {
+        const q = new URLSearchParams(window.location.search).get("jahreszeit");
+        if (q === "auto") localStorage.removeItem("wetter_jahreszeit");
+        else if (SEASONS.includes(q)) localStorage.setItem("wetter_jahreszeit", q);
+        forced = winterPreviewOn() ? "winter" : localStorage.getItem("wetter_jahreszeit");
+      } catch (e) { /* egal */ }
+      const d = new Date(), m = d.getMonth();
+      const byDate = m <= 1 || m === 11 ? "winter" : m <= 4 ? "fruehling" : m <= 7 ? "sommer" : m <= 9 ? "herbst" : "spaetherbst";
+      const season = SEASONS.includes(forced) ? forced : byDate;
+      const xmas = season === "winter" && (forced === "winter" || m === 11 || (m === 0 && d.getDate() <= 6));
+      return { season, xmas };
+    }
+
     function buildScene3D(T, scene) {
       const TS = Math.sin(D3.TILT), TC = Math.cos(D3.TILT), GR = D3.GROUND;
       const zG = (sy) => (sy - GR) / TS;                       // Tiefe, in der der Boden bei SVG-y liegt
@@ -651,7 +669,7 @@
       const tri = new T.Shape(); tri.moveTo(115, yE); tri.lineTo(260, yA); tri.lineTo(405, yE); tri.lineTo(115, yE);
       const gable = add(new T.Mesh(new T.ShapeGeometry(tri), basic("roof"))); gable.position.z = ZH + 0.1;
       const roofTop = basic("roofTop"), roofEdge = basic("roofEdge"), roofUnder = basic("roofUnder");
-      const slopeA = Math.atan2(yA - yE, 145), slopeL = Math.hypot(145, yA - yE), RT = 3.2, OV = 7;
+      const slopeA = Math.atan2(yA - yE, 145), slopeL = Math.hypot(145, yA - yE), RT = 1.8, OV = 7;
       // Dachplatten: Unterseite genau auf der Giebelkante, 8 Einheiten Überstand an der Traufe
       [-1, 1].forEach((sd) => {
         const slab = new T.Mesh(BOX, [roofEdge, roofEdge, roofTop, roofUnder, roofEdge, roofEdge]);
@@ -664,7 +682,7 @@
         slab.rotation.z = sd < 0 ? slopeA : -slopeA;
         add(slab);
       });
-      const ridge = add(new T.Mesh(new T.CylinderGeometry(2.2, 2.2, DEP + 2 * OV, 10), roofEdge));
+      const ridge = add(new T.Mesh(new T.CylinderGeometry(1.3, 1.3, DEP + 2 * OV, 10), roofTop));
       ridge.rotation.x = Math.PI / 2; ridge.position.set(260, yA + RT * 0.9, ZH - DEP / 2);
       // Schornstein (fest grau wie im SVG), steht auf der rechten Dachfläche
       const chimZ = -205;
@@ -741,30 +759,186 @@
         const tip = new T.Object3D(); tip.position.y = len; g.add(tip);
         return tip;
       };
-      // Laubbaum: Stamm, Äste (auch im Winter sichtbar), Krone aus weichen Blattballen
-      const leafTree = (x, z, h, crownR, seed) => {
+      // Laubbaum, natürlich gewachsen: Stamm teilt sich rekursiv in immer dünnere, leicht gebogene Äste
+      // (Querschnitt bleibt etwa erhalten, Leonardo-Regel). Alle Äste in einem Mesh. Blätter als viele
+      // kleine Einzelblätter (InstancedMesh, Farbe je Blatt), Dichte und Farben je Jahreszeit.
+      const LEAF_GEO = (() => { const s = new T.Shape(); s.moveTo(0, -1); s.quadraticCurveTo(0.75, -0.15, 0, 1); s.quadraticCurveTo(-0.75, -0.15, 0, -1); return new T.ShapeGeometry(s, 4); })();
+      const leafMat = new T.MeshToonMaterial({ color: 0xffffff, gradientMap: grad, side: T.DoubleSide });
+      const tubeMesh = (segs, sides) => {
+        const pos = [], nor = [], idx = [], up = new T.Vector3(0, 1, 0), side = new T.Vector3(1, 0, 0);
+        for (const [a, b, r0, r1] of segs) {
+          const d = b.clone().sub(a).normalize();
+          const u = Math.abs(d.y) > 0.9 ? side.clone().cross(d).normalize() : up.clone().cross(d).normalize();
+          const v = d.clone().cross(u).normalize();
+          const base = pos.length / 3;
+          for (let ring = 0; ring < 2; ring++) {
+            const c = ring ? b : a, r = ring ? r1 : r0;
+            for (let i = 0; i < sides; i++) {
+              const ang = i / sides * Math.PI * 2, n = u.clone().multiplyScalar(Math.cos(ang)).addScaledVector(v, Math.sin(ang));
+              pos.push(c.x + n.x * r, c.y + n.y * r, c.z + n.z * r); nor.push(n.x, n.y, n.z);
+            }
+          }
+          for (let i = 0; i < sides; i++) {
+            const i2 = (i + 1) % sides;
+            idx.push(base + i, base + sides + i, base + i2, base + i2, base + sides + i, base + sides + i2);
+          }
+        }
+        const g = new T.BufferGeometry();
+        g.setAttribute("position", new T.Float32BufferAttribute(pos, 3)); g.setAttribute("normal", new T.Float32BufferAttribute(nor, 3)); g.setIndex(idx);
+        return g;
+      };
+      const leafTree = (x, z, h, seed, opt) => {
         const t = new T.Group(); t.position.set(x, 0, z); add(t);
         let s = seed; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
-        limb(t, 0, 0, 0, h * 0.62, 0, 0, h * 0.05, h * 0.035, bark);
-        const branches = [];
-        for (let i = 0; i < 6; i++) {
-          const a = (i % 2 ? 1 : -1) * (0.45 + rnd() * 0.55), y0 = h * (0.38 + i * 0.05);
-          const tip = limb(t, 0, y0, (rnd() - 0.5) * 3, h * (0.28 + rnd() * 0.14), a, (rnd() - 0.5) * 0.5, h * 0.022, h * 0.01, bark);
-          branches.push(tip);
-          for (let j = 0; j < 2; j++) limb(tip.parent, 0, h * (0.18 + j * 0.08), 0, h * (0.1 + rnd() * 0.08), (j ? 1 : -1) * (0.5 + rnd() * 0.4), 0, h * 0.01, h * 0.004, barkDark);
-        }
-        limb(t, 0, h * 0.6, 0, h * 0.25, 0.1, 0, h * 0.028, h * 0.012, bark);
-        const crown = new T.Group(); t.add(crown);
-        const cy = h * 0.72;
-        const blobs = [[0, 0.15, 0, 0.62], [-0.55, -0.1, 0.1, 0.5], [0.55, -0.05, 0, 0.52], [-0.3, 0.45, -0.1, 0.48], [0.35, 0.42, 0.1, 0.46],
-                       [0, -0.35, 0.3, 0.5], [-0.75, -0.4, -0.2, 0.36], [0.78, -0.35, 0.1, 0.38], [0.05, 0.7, 0, 0.36]];
-        blobs.forEach(([bx, by, bz, br], i) => {
-          const m = new T.Mesh(SPH, i % 3 === 0 ? leafA : i % 3 === 1 ? leafB : leafC);
-          m.scale.set(crownR * br, crownR * br * 0.9, crownR * br * 0.8); m.position.set(bx * crownR, cy + by * crownR, bz * crownR); crown.add(m);
+        const segs = [], tips = [];
+        const grow = (p, dir, len, r, depth) => {
+          let cur = p.clone(), d = dir.clone();
+          for (let k = 0; k < 3; k++) {
+            const wob = depth >= opt.depth - 1 ? 0.12 : 0.3;      // Stamm fast gerade, Zweige verspielter
+            d.add(new T.Vector3((rnd() - 0.5) * wob, (rnd() - 0.5) * 0.15 + opt.up, (rnd() - 0.5) * wob * 0.4)).normalize();
+            d.x += (opt.lean || 0) * 0.02 * (opt.depth - depth); d.normalize();
+            const nxt = cur.clone().addScaledVector(d, len / 3);
+            segs.push([cur, nxt, r * (1 - k * 0.08), r * (1 - (k + 1) * 0.08)]);
+            cur = nxt;
+          }
+          const rEnd = r * 0.76;
+          if (depth === 0 || rEnd < opt.minR) { tips.push(cur.clone()); return; }
+          if (depth <= 2) tips.push(cur.clone());
+          const n = depth >= opt.depth - 1 ? 2 : (rnd() < 0.55 ? 2 : 3);
+          for (let i = 0; i < n; i++) {
+            const leader = i === 0;
+            const ang = leader ? (rnd() - 0.5) * 0.35 : (0.38 + rnd() * 0.4) * (i % 2 ? 1 : -1) * (rnd() < 0.8 ? 1 : -1);
+            // Seitenäste fächern vor allem in der Bildebene auf (gut lesbare Silhouette)
+            const az = (rnd() - 0.5) * 0.9;
+            const nd = d.clone().applyAxisAngle(new T.Vector3(Math.sin(az), 0, Math.cos(az)), ang);
+            nd.z *= 0.55; nd.normalize();
+            if (nd.y < -0.15) nd.y = -0.15, nd.normalize();
+            const share = leader ? 0.78 : 0.58 + rnd() * 0.08;
+            grow(cur, nd, len * (leader ? 0.8 : 0.66 + rnd() * 0.14), rEnd * share / 0.76 * 0.76, depth - 1);
+          }
+        };
+        grow(new T.Vector3(0, -2, 0), new T.Vector3(0, 1, 0), h * opt.trunk, h * opt.r, opt.depth);
+        const wood = new T.Mesh(tubeMesh(segs, 6), bark); t.add(wood);
+        // Blätter rund um die Zweigspitzen
+        const pts = [];
+        tips.forEach((tp) => { for (let i = 0; i < opt.perTip; i++) pts.push(tp.clone().add(new T.Vector3((rnd() - 0.5) * opt.spread, (rnd() - 0.4) * opt.spread * 0.9, (rnd() - 0.5) * opt.spread * 0.6))); });
+        for (let i = pts.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [pts[i], pts[j]] = [pts[j], pts[i]]; }   // gemischt → Teilmenge = zufällige Auswahl
+        const leaves = new T.InstancedMesh(LEAF_GEO, leafMat, pts.length);
+        const o = new T.Object3D();
+        pts.forEach((p, i) => {
+          o.position.copy(p); o.rotation.set((rnd() - 0.5) * 1.6, (rnd() - 0.5) * 1.6, rnd() * Math.PI * 2);
+          o.scale.setScalar(opt.leaf * (0.75 + rnd() * 0.5)); o.updateMatrix(); leaves.setMatrixAt(i, o.matrix);
+          leaves.setColorAt(i, new T.Color(0x4f8c45));
         });
-        return { crown, top: [x, cy + crownR * 0.9, z] };
+        leaves.instanceMatrix.needsUpdate = true; t.add(leaves);
+        return { group: t, leaves, pts, rnd, x, z, blossom: opt.blossom, n: pts.length };
       };
-      const trees = [leafTree(38, -95, 150, 52, 5), leafTree(494, -100, 100, 32, 9)];
+      const trees = [
+        leafTree(48, -92, 150, 5, { trunk: 0.3, r: 0.034, depth: 6, minR: 0.3, perTip: 16, spread: 17, leaf: 3.3, up: 0.1, lean: 0.4 }),
+        leafTree(492, -100, 100, 9, { trunk: 0.32, r: 0.03, depth: 5, minR: 0.25, perTip: 16, spread: 14, leaf: 3.0, up: 0.1, lean: -0.3, blossom: true }),
+      ];
+      // Jahreszeiten: Blattdichte, Farben, fallende Blätter pro Sekunde, Blätter am Boden zu Beginn
+      const SEASON = {
+        fruehling:   { dens: 0.75, cols: [0x8cc65a, 0x9fd36a, 0x7ab84e, 0xa8d872], bloom: [0xf8dbe6, 0xffffff, 0xf3c6d6], fall: 0, ground: 0 },
+        sommer:      { dens: 1, cols: [0x356e34, 0x3f7a3a, 0x4a8640, 0x2f6533, 0x58934a], fall: 0.03, ground: 0 },
+        herbst:      { dens: 0.92, cols: [0x6f8f3a, 0x8aa03a, 0xc9a227, 0xe0a030, 0xe08a2a, 0xd06a28, 0xc8502a, 0xa83a26], fall: 0.5, ground: 70 },
+        spaetherbst: { dens: 0.32, cols: [0xd98a2a, 0xc45a26, 0xa8402a, 0xd9b040, 0x9a6a34, 0xb84a2a], fall: 1.3, ground: 190 },
+        winter:      { dens: 0, cols: [0x8a6a3a], fall: 0, ground: 0 },
+      };
+      let seasonNow = null;
+      const applySeason = (name) => {
+        const P = SEASON[name] || SEASON.sommer;
+        trees.forEach((tr) => {
+          const c = new T.Color();
+          let y0 = 1e9, y1 = -1e9; tr.pts.forEach((p) => { y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); });
+          for (let i = 0; i < tr.n; i++) {
+            const r = tr.rnd(), p = tr.pts[i];
+            // Tiefe in der Krone: unten und hinten etwas dunkler, oben vorn heller
+            const shade = -0.1 * (1 - (p.y - y0) / Math.max(1, y1 - y0)) - (p.z < 0 ? 0.05 : 0) + (tr.rnd() - 0.5) * 0.06;
+            if (tr.blossom && P.bloom && r < 0.3) c.setHex(P.bloom[Math.floor(tr.rnd() * P.bloom.length)]);
+            else c.setHex(P.cols[Math.floor(tr.rnd() * P.cols.length)]).offsetHSL(0, 0, shade);
+            tr.leaves.setColorAt(i, c);
+          }
+          tr.leaves.instanceColor.needsUpdate = true;
+          tr.leaves.count = Math.round(tr.n * P.dens);
+        });
+        // Laub am Boden: meist unter den Bäumen, einzeln auf der Wiese
+        groundN = 0;
+        for (let i = 0; i < P.ground; i++) {
+          const tr = trees[i % 3 === 2 ? 1 : 0], under = tr.rnd() < 0.75;
+          const gx = under ? tr.x + (tr.rnd() - 0.5) * 110 : 20 + tr.rnd() * 480;
+          const gz = under ? tr.z + (tr.rnd() - 0.3) * 90 : -130 + tr.rnd() * 140;
+          placeGround(gx, gz, P.cols[Math.floor(tr.rnd() * P.cols.length)]);
+        }
+        groundLeaves.visible = name !== "winter" && P.ground > 0;
+        fallers.forEach((f) => { f.on = false; }); fallMesh.count = 0;
+      };
+      // Laub am Boden (Ringpuffer) und fallende Blätter
+      const GROUND_MAX = 260;
+      const groundLeaves = new T.InstancedMesh(LEAF_GEO, leafMat, GROUND_MAX); groundLeaves.count = 0; add(groundLeaves);
+      groundLeaves.setColorAt(0, new T.Color()); let groundN = 0;
+      const go = new T.Object3D(), gc = new T.Color();
+      const placeGround = (gx, gz, hex) => {
+        const i = groundN % GROUND_MAX; groundN++;
+        go.position.set(gx, 0.35 + (i % 7) * 0.02, gz); go.rotation.set(-Math.PI / 2 + (Math.random() - 0.5) * 0.3, 0, Math.random() * 6.28);
+        go.scale.setScalar(2.2 + Math.random() * 0.9); go.updateMatrix(); groundLeaves.setMatrixAt(i, go.matrix);
+        groundLeaves.setColorAt(i, gc.setHex(hex).offsetHSL(0, -0.08, -0.06));
+        groundLeaves.count = Math.min(GROUND_MAX, groundN);
+        groundLeaves.instanceMatrix.needsUpdate = true; groundLeaves.instanceColor.needsUpdate = true;
+      };
+      const FALL_MAX = 40;
+      const fallMesh = new T.InstancedMesh(LEAF_GEO, leafMat, FALL_MAX); fallMesh.count = 0; add(fallMesh);
+      fallMesh.setColorAt(0, new T.Color());
+      const fallers = Array.from({ length: FALL_MAX }, () => ({ on: false, p: new T.Vector3(), vy: 0, ph: 0, sp: 0, col: 0 }));
+      let fallAcc = 0;
+      const tickLeaves = (name, t, dt) => {
+        const P = SEASON[name] || SEASON.sommer;
+        fallAcc += dt * P.fall;
+        while (fallAcc > 1) {
+          fallAcc -= 1;
+          const f = fallers.find((q) => !q.on); if (!f) break;
+          const tr = trees[Math.random() < 0.65 ? 0 : 1];
+          if (!tr.leaves.count) break;
+          const lp = tr.pts[Math.floor(Math.random() * tr.leaves.count)];
+          f.on = true; f.p.set(tr.x + lp.x, lp.y, tr.z + lp.z); f.vy = 7 + Math.random() * 5; f.ph = Math.random() * 6.28; f.sp = 1.5 + Math.random() * 2;
+          f.col = P.cols[Math.floor(Math.random() * P.cols.length)]; f.drift = 2 + Math.random() * 4;
+        }
+        let n = 0;
+        for (const f of fallers) {
+          if (!f.on) continue;
+          f.p.y -= f.vy * dt; f.p.x += (Math.sin(t * f.sp + f.ph) * 9 + f.drift) * dt; f.p.z += Math.cos(t * f.sp * 0.7 + f.ph) * 3 * dt;
+          if (f.p.y <= 0.5) { f.on = false; placeGround(f.p.x, f.p.z, f.col); continue; }
+          go.position.copy(f.p); go.rotation.set(Math.sin(t * f.sp + f.ph) * 1.1, t * f.sp * 0.8 + f.ph, Math.cos(t * f.sp * 1.3 + f.ph) * 0.9);
+          go.scale.setScalar(2.5); go.updateMatrix(); fallMesh.setMatrixAt(n, go.matrix); fallMesh.setColorAt(n, gc.setHex(f.col)); n++;
+        }
+        fallMesh.count = n;
+        if (n) { fallMesh.instanceMatrix.needsUpdate = true; fallMesh.instanceColor.needsUpdate = true; }
+        // sanftes Wiegen im Wind
+        trees.forEach((tr, i) => { tr.group.rotation.z = Math.sin(t * 0.55 + i * 2) * 0.006 + Math.sin(t * 1.3 + i) * 0.002; });
+      };
+      // Kaminrauch: weiche Wölkchen, steigen, wachsen, verblassen, treiben mit dem Wind
+      const smokeMat = () => new T.MeshBasicMaterial({ map: glowTex(), color: 0xb8c0cc, transparent: true, opacity: 0, depthWrite: false });
+      const puffs3 = Array.from({ length: 16 }, () => { const m = new T.Mesh(PL, smokeMat()); m.visible = false; add(m); return { m, age: 99, life: 6 }; });
+      let smokeAcc = 0;
+      const tickSmoke = (S, t, dt) => {
+        const amt = S.smoke || 0;
+        smokeAcc += dt * amt * 1.4;
+        if (smokeAcc > 1) {
+          smokeAcc = 0;
+          const p = puffs3.find((q) => q.age >= q.life);
+          if (p) { p.age = 0; p.life = 5 + Math.random() * 2.5; p.x0 = 345 + (Math.random() - 0.5) * 6; p.m.position.set(p.x0, 204, chimZ - 10); p.ph = Math.random() * 6; }
+        }
+        const night = S.isDay ? 0 : 1;
+        for (const p of puffs3) {
+          if (p.age >= p.life) { p.m.visible = false; continue; }
+          p.age += dt; const u = p.age / p.life;
+          p.m.visible = true;
+          p.m.position.y = 204 + p.age * 8; p.m.position.x = p.x0 + p.age * p.age * 0.6 + Math.sin(p.age * 0.9 + p.ph) * 2.5;
+          p.m.scale.setScalar(5 + u * 18);
+          p.m.material.color.setHex(night ? 0x6e7890 : 0xb8c0cc);
+          p.m.material.opacity = (night ? 0.22 : 0.3) * Math.min(1, u * 5) * (1 - u) * Math.max(0.5, amt);
+        }
+      };
       // Tanne vorn rechts, mit Weihnachtsschmuck (nur im Winter)
       const fir = new T.Group(); fir.position.set(452, 0, -32); add(fir);
       limb(fir, 0, 0, 0, 10, 0, 0, 2.6, 2.2, bark);
@@ -823,9 +997,11 @@
         knob.position.x += ((S.eOn ? 251 : 269) - knob.position.x) * (knob.userData.init ? k * 1.5 : 1); knob.userData.init = true;
         knob.position.y = yAt(252, dz + 0.4);
         // Jahreszeit: im Winter kahle Laubbäume, Tanne geschmückt
-        trees.forEach((tr) => { tr.crown.visible = !S.winter; });
-        deco.visible = !!S.winter;
-        if (S.winter) {
+        if (S.season !== seasonNow) { seasonNow = S.season; applySeason(S.season); }
+        tickLeaves(S.season, t, dt);
+        tickSmoke(S, t, dt);
+        deco.visible = S.season === "winter" && S.xmas;
+        if (deco.visible) {
           const night = S.isDay ? 0.3 : 1;
           lights.forEach((L) => {
             const tw = 0.55 + 0.45 * Math.max(0, Math.sin(t * (0.9 + (L.ph % 1)) + L.ph)) ;
@@ -849,10 +1025,10 @@
       return _glowTex;
     }
 
-    function Deer3D({ sleeping, light, isDayish, zzzRef, onFail, winter, scene: sceneState }) {
+    function Deer3D({ sleeping, light, isDayish, zzzRef, onFail, winter, scene: sceneState, noBf }) {
       const canvasRef = useRef(null);
-      const live = useRef({ sleeping, light, isDayish, winter, scene: sceneState });
-      live.current = { sleeping, light, isDayish, winter, scene: sceneState };
+      const live = useRef({ sleeping, light, isDayish, winter, scene: sceneState, noBf });
+      live.current = { sleeping, light, isDayish, winter, scene: sceneState, noBf };
 
       useEffect(() => {
         let raf = 0, disposed = false, renderer = null, ro = null;
@@ -1032,7 +1208,7 @@
             const Lv = live.current;
             const asleep = Lv.sleeping || st.forced === "sleep";
             if (asleep && st.bf) { st.bf = null; }
-            if (Lv.winter && st.bf) st.bf = null;           // im Winter keine Schmetterlinge
+            if ((Lv.winter || Lv.noBf) && st.bf) st.bf = null;   // im Winter und Spätherbst keine Schmetterlinge
             // Schnee sammelt sich auf dem Rücken; ab und zu schüttelt sich das Reh
             if (Lv.winter) {
               st.snow = Math.min(1, st.snow + dt / (asleep ? 45 : 70));
@@ -1045,7 +1221,7 @@
             const bfOnDeer = st.bf && st.bf.mode === "sit" && st.bf.spot && st.bf.spot.deer;
             if (!asleep && !reduce && !bfOnDeer && !st.curious && t > st.actionEnd) pickAction(t);
             if (bfOnDeer && st.action !== "idle" && st.action !== "sit" && st.action !== "rest") setAction("idle", t, 3);
-            if (!asleep && !reduce && Lv.isDayish && !Lv.winter && !st.bf && t > st.nextBf) {
+            if (!asleep && !reduce && Lv.isDayish && !Lv.winter && !Lv.noBf && !st.bf && t > st.nextBf) {
               if (st.nextBf > 0) startButterfly(t);
               st.nextBf = t + r3(50, 120);
             }
@@ -1592,7 +1768,7 @@
       return <canvas ref={ref} aria-hidden="true" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", borderRadius: 16 }} />;
     }
 
-    function House({ slot, slotName, date, slotIdx, showBird, deerV2, winter, scene3d }) {
+    function House({ slot, slotName, date, slotIdx, showBird, deerV2, winter, scene3d, season, xmas }) {
       const sky = SKY[slotName];
       const kOn = isOn(slot.k), sOn = isOn(slot.s), eOn = isOn(slot.e), gOn = isOn(slot.g);
       const kErr = isError(slot.k), sErr = isError(slot.s), eErr = isError(slot.e), gErr = isError(slot.g);
@@ -1729,12 +1905,15 @@
       </React.Fragment>);
       // Zustand für die 3D-Szene: dieselben Farben wie im SVG
       const sh = (b, f, add) => "rgb(" + b.map((v) => Math.max(0, Math.min(255, Math.round(v * f + (add || 0))))).join(", ") + ")";
+      const cold = slot.w && typeof slot.w.t === "number" ? slot.w.t < 10 : ["herbst", "spaetherbst", "winter"].includes(season);
       const sceneState = s3 ? {
-        isDay, kOn, sOn, eOn, winter: !!winter,
+        isDay, kOn, sOn, eOn, winter: !!winter, season: season || "sommer", xmas: !!xmas,
+        // Kaminrauch: wenn in der Küche etwas los ist, sonst morgens/abends/nachts bei Kälte
+        smoke: kOn ? 1 : cold && ["Morgens", "Abends", "Nachts"].includes(slotName) ? 0.7 : 0,
         colors: {
           ground: groundColor, path: sh(groundBase, 1.12, 10), bush: sh(groundBase, 1.05), bushTop: sh(groundBase, 1.3, 6),
           wall: wallColor, wallDark: sh(wallBase, 0.75), siding: sh(wallBase, 1, isDay ? 6 : 3),
-          roof: roofColor, roofTop: sh(roofBase, 1.12, 8), roofEdge: roofEdge, roofUnder: sh(roofBase, 0.7),
+          roof: roofColor, roofTop: sh(roofBase, 0.86), roofEdge: roofEdge, roofUnder: sh(roofBase, 0.6),
           winBg: isDay ? "#1e2a3e" : "#1a2030", kPane: kOn ? kFill : kOffFill, sPane: sOn ? sFill : sOffFill,
           frame: frameBright, frameTop: frameBright,
           door: eOn ? "#5a9b5e" : eErr ? (isFehler(slot.e) ? "#7a4a3a" : "#5a4a30") : "#4a4a52",
@@ -2094,13 +2273,12 @@
             {!s3 && overlayEl}
           </g>
         </svg>
-        {use3d && <Deer3D sleeping={deerSleeping} isDayish={isDay || isDawn || isDusk} zzzRef={zzzRef} winter={!!winter} scene={sceneState}
+        {use3d && <Deer3D sleeping={deerSleeping} isDayish={isDay || isDawn || isDusk} zzzRef={zzzRef} winter={!!winter} scene={sceneState} noBf={s3 && (season === "spaetherbst" || season === "winter")}
           light={isDay ? 1.12 : isDawn ? 0.9 : isDusk ? 0.72 : 0.55} onFail={() => setDeer3dFailed(true)} />}
         {winter && !s3 && <Snowfall slotName={slotName} />}
         {s3 && <svg viewBox="0 0 520 320" fill="none" aria-hidden="true" style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
           <g clipPath="url(#sceneClip)">
             <g transform="translate(60, 0)">
-              {smokeEl}
               <g transform="translate(0, -3)">{birdEl}</g>
               {kErrBadge}{sErrBadge}{eErrBadge}
               {zzzEl}
@@ -2432,8 +2610,10 @@
 
     function DashboardMain({ history: allHistory, lastPoll, backendVersion, showBird, onToggleBird }) {
       const deer = useDeerMode(showBird);
-      const [winter] = useState(winterPreviewOn);
+      const [winter2d] = useState(winterPreviewOn);
       const [scene3d] = useState(scenePreviewOn);
+      const [seasonI] = useState(seasonInfo);
+      const winter = scene3d ? seasonI.season === "winter" : winter2d;
       const [week, setWeek] = useState(0);
       const [selDay, setSelDay] = useState(0);
       const [selSlot, setSelSlot] = useState(getNowSlot());
@@ -2651,7 +2831,7 @@
                 <div style={{ maxWidth: 604, margin: "0 auto", padding: mob ? "0 8px" : "0 12px" }}>
                 {/* HOUSE */}
                 <div style={{ paddingTop: mob ? 4 : 8 }}>
-                  <House slot={slot} slotName={slotName} date={day.date} slotIdx={selSlot} showBird={showBird} deerV2={deer.use3d} winter={winter} scene3d={scene3d} />
+                  <House slot={slot} slotName={slotName} date={day.date} slotIdx={selSlot} showBird={showBird} deerV2={deer.use3d} winter={winter} scene3d={scene3d} season={scene3d ? seasonI.season : null} xmas={seasonI.xmas} />
                   {deer.panel && <DeerPreviewPanel />}
                 </div>
 
