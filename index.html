@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.14.0
+  Version: 1.15.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.14.0";
+    const FRONTEND_VERSION = "1.15.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -422,6 +422,12 @@
       breath.add(ell(M.cream, 2.6, 4.8, 3.6, 12.2, 0.6, 0));                 // Brust-Latz
       breath.add(ell(M.cream, 2.2, 3.2, 3.9, -14.9, 1.4, 0));                // Spiegel
       J.spotBack = grp(-3, 6.9, 0); breath.add(J.spotBack);                   // Landeplatz Rücken
+      // Schnee auf dem Rücken (Winter): flache, unregelmäßige Haube, wächst mit der Schneemenge
+      const snowM = mat(0xf2f6fc);
+      J.snowCap = grp(-2.5, 6.6, 0); breath.add(J.snowCap);
+      [[7.4, 2.3, 3.9, 0, 0.5], [4.0, 2.0, 3.1, -6.8, -0.2], [3.6, 1.8, 2.8, 6.2, -0.4], [2.6, 1.7, 2.2, 2.5, 1.2], [2.2, 1.5, 2.0, -3.5, 1.0]].forEach(([rx, ry, rz, x, y]) =>
+        J.snowCap.add(ell(snowM, rx, ry, rz, x, y, 0)));
+      J.snowCap.visible = false;
       // Punkte: in versetzten Reihen entlang der Wirbelsäule, per Strahl auf die
       // tatsächliche Außenhaut gesetzt (Rumpf, Brust und Po zusammen)
       const skin = breath.children.slice(0, 3);
@@ -513,6 +519,7 @@
         H.add(base); J.ears.push(flick);
         if (side > 0) { J.spotEar = grp(0, 10.2, 0); flick.add(J.spotEar); }  // Landeplatz Ohrspitze
       });
+      J.headSnow = ell(snowM, 2.9, 1.0, 2.5, 2.2, 9.7, 0); H.add(J.headSnow); J.headSnow.visible = false;
 
       // ── Schmetterling: echtes 3D-Modell ──
       // Körperachse = lokale x (Kopf vorn), Flügel nach ±z, oben = +y.
@@ -578,10 +585,10 @@
       return J;
     }
 
-    function Deer3D({ sleeping, light, isDayish, zzzRef, onFail }) {
+    function Deer3D({ sleeping, light, isDayish, zzzRef, onFail, winter }) {
       const canvasRef = useRef(null);
-      const live = useRef({ sleeping, light, isDayish });
-      live.current = { sleeping, light, isDayish };
+      const live = useRef({ sleeping, light, isDayish, winter });
+      live.current = { sleeping, light, isDayish, winter };
 
       useEffect(() => {
         let raf = 0, disposed = false, renderer = null, ro = null;
@@ -606,6 +613,12 @@
           // Schatten des Schmetterlings am Boden: Tiefen- und Höhenhinweis
           const bfShadow = new T.Mesh(new T.CircleGeometry(1, 20), new T.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthWrite: false }));
           bfShadow.rotation.x = -Math.PI / 2; bfShadow.position.y = 0.1; scene.add(bfShadow);
+          // Schneewolke beim Abschütteln: kleiner Vorrat an Flocken-Kugeln
+          const puffGeo = new T.SphereGeometry(1, 10, 8);
+          const puffs = Array.from({ length: 22 }, () => {
+            const m = new T.Mesh(puffGeo, new T.MeshBasicMaterial({ color: 0xf4f8ff, transparent: true, opacity: 0, depthWrite: false }));
+            m.visible = false; scene.add(m); return { m, v: new T.Vector3(), age: 9, life: 1 };
+          });
 
           const resize = () => {
             const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -625,6 +638,7 @@
             action: "idle", actionStart: 0, actionEnd: 0, look: null,
             imp: { earL: [], earR: [], tail: [], head: [] },
             nextEar: 0, nextTail: 0, nextBlink: 0, blinkT: -1, blinkDur: 0.2, bf: null, nextBf: 0, forced: null,
+            snow: 0, shakeT: -9, nextShake: 0, shed: false,
             t0: deerClock(), last: deerClock(),
           };
           const now = () => (deerClock() - st.t0) / 1000;
@@ -727,6 +741,7 @@
 
           window.__deerApi = {
             pos: () => st.x,
+            snow: (v) => { st.snow = v; },
             dbg: () => ({ mode: st.bf && st.bf.mode, spot: st.bf && st.bf.spot && (st.bf.spot.deer || "scene"), q: st.bf && st.bf.queue.length,
               neckYaw: Math.round(st.cur.neckYaw), headYaw: Math.round(st.cur.headYaw), action: st.action, look: st.look && Object.keys(st.look)[0] }),
             trigger: (name) => {
@@ -735,6 +750,7 @@
               if (name === "butterfly:land") { startButterfly(t); st.bf.p.set(st.x + 30, 60, 14); st.bf.queue = [{ spot: { deer: "nose" } }]; return; }
               if (name.indexOf("butterfly:") === 0) { startButterfly(t); st.bf.p.set(st.x + 40, 80, 10); st.bf.queue = [{ spot: name === "butterfly:fence" ? { scene: SCENE_SPOTS[1] } : { deer: name.slice(10) } }]; return; }
               if (name === "sleep") { st.forced = "sleep"; return; }
+              if (name === "shake") { st.snow = Math.max(st.snow, 0.8); st.shakeT = t; st.shed = false; return; }
               if (name === "auto") return setAction("idle", t, 1.5);
               if (name.indexOf("walk:") === 0) { setAction("walk", t, 20); st.destX = c3(+name.slice(5), D3.RANGE[0], D3.RANGE[1]); return; }
               setAction(name, t, name === "rest" ? 30 : name === "sit" ? 25 : name === "walk" ? 20 : name === "look" ? 7.5 : 8);
@@ -751,11 +767,20 @@
             const Lv = live.current;
             const asleep = Lv.sleeping || st.forced === "sleep";
             if (asleep && st.bf) { st.bf = null; }
+            if (Lv.winter && st.bf) st.bf = null;           // im Winter keine Schmetterlinge
+            // Schnee sammelt sich auf dem Rücken; ab und zu schüttelt sich das Reh
+            if (Lv.winter) {
+              st.snow = Math.min(1, st.snow + dt / (asleep ? 45 : 70));
+              if (!st.nextShake) st.nextShake = t + r3(20, 35);
+              if (!asleep && !reduce && st.snow > 0.55 && t > st.nextShake && st.action !== "walk") {
+                st.shakeT = t; st.shed = false; st.nextShake = t + r3(30, 55);
+              }
+            } else st.snow = 0;
 
             const bfOnDeer = st.bf && st.bf.mode === "sit" && st.bf.spot && st.bf.spot.deer;
             if (!asleep && !reduce && !bfOnDeer && !st.curious && t > st.actionEnd) pickAction(t);
             if (bfOnDeer && st.action !== "idle" && st.action !== "sit" && st.action !== "rest") setAction("idle", t, 3);
-            if (!asleep && !reduce && Lv.isDayish && !st.bf && t > st.nextBf) {
+            if (!asleep && !reduce && Lv.isDayish && !Lv.winter && !st.bf && t > st.nextBf) {
               if (st.nextBf > 0) startButterfly(t);
               st.nextBf = t + r3(50, 120);
             }
@@ -966,6 +991,37 @@
             J.root.scale.setScalar(D3.SCALE);
             J.body.position.y = 18 - c.bodyY - bob;
             J.body.rotation.z = -rad(c.pitch);
+            // Abschütteln: kräftiges, schnell abklingendes Rollen um die Körperachse
+            const sa = t - st.shakeT;
+            if (sa >= 0 && sa < 1.4) {
+              if (sa < 0.05) { impulse("earL", -30, 34, 4); impulse("earR", -30, 31, 4); impulse("tail", -30, 30, 4); }
+              J.body.rotation.x = rad(11) * Math.sin(sa * 30) * Math.exp(-sa * 2.6) * c3(sa / 0.12, 0, 1);
+              if (!st.shed && sa > 0.18) {
+                st.shed = true;
+                if (st.snow > 0.08) {
+                  const wp = new T.Vector3(); J.snowCap.getWorldPosition(wp);
+                  const n = Math.round(8 + 14 * st.snow);
+                  for (let i = 0; i < n; i++) {
+                    const p = puffs[i]; p.age = 0; p.life = r3(0.8, 1.5);
+                    p.m.position.set(wp.x + r3(-9, 9), wp.y + r3(-1, 2), wp.z + r3(-3, 3));
+                    p.v.set(r3(-14, 14), r3(6, 20), r3(-6, 8)); p.m.scale.setScalar(r3(0.5, 1.2) * (0.6 + st.snow * 0.6));
+                  }
+                  st.snow *= 0.08;
+                }
+              }
+            } else J.body.rotation.x = 0;
+            J.snowCap.visible = J.headSnow.visible = st.snow > 0.03;
+            const sw = Math.pow(st.snow, 0.7);
+            J.snowCap.scale.set(0.55 + 0.45 * sw, 0.15 + 0.95 * sw, 0.7 + 0.3 * sw);
+            J.headSnow.scale.set(2.9 * (0.5 + 0.5 * sw), 1.0 * (0.2 + 0.8 * sw), 2.5 * (0.6 + 0.4 * sw));
+            for (const p of puffs) {
+              if (p.age > p.life) { p.m.visible = false; continue; }
+              p.age += dt; p.m.visible = true;
+              p.v.y -= 32 * dt; p.v.multiplyScalar(Math.exp(-dt * 1.2));
+              p.m.position.addScaledVector(p.v, dt);
+              if (p.m.position.y < 0.5) { p.m.position.y = 0.5; p.v.set(0, 0, 0); }
+              p.m.material.opacity = 0.95 * (1 - p.age / p.life);
+            }
             J.breath.scale.y = 1 + breathe * (asleep ? 0.025 : 0.012);
             J.neckYaw.rotation.y = rad(c.neckYaw);
             J.neck.rotation.z = -rad(c.neck - c.pitch + chew + Math.sin(ph * 2 + 0.6) * 2.5 * w);
@@ -1087,12 +1143,190 @@
           <span style={{ fontSize: 11, color: C.textFaint, width: "100%", textAlign: "center", letterSpacing: 1 }}>REH-VORSCHAU (3D)</span>
           {[["Automatisch", "auto"], ["Stehen", "idle"], ["Spazieren", "walk"], ["Grasen", "graze"], ["Umschauen", "look"],
             ["Zu dir schauen", "viewer"], ["Nach hinten", "back"], ["Schnuppern", "sniff"],
-            ["Sitzen", "sit"], ["Liegen", "rest"], ["Schlafen", "sleep"], ["Schmetterling", "butterfly"]].map(([l, n]) => btn(l, n))}
+            ["Sitzen", "sit"], ["Liegen", "rest"], ["Schlafen", "sleep"], ["Schmetterling", "butterfly"], ["Schütteln", "shake"]].map(([l, n]) => btn(l, n))}
         </div>
       );
     }
 
-    function House({ slot, slotName, date, slotIdx, showBird, deerV2 }) {
+    // ─── WINTER (Vorschau) ───────────────────────────────────────────────
+    // Nur im Karsten-Modus mit ?winter=1 (localStorage wetter_winter), ?winter=0 schaltet ab.
+    function winterPreviewOn() {
+      try {
+        const q = new URLSearchParams(window.location.search).get("winter");
+        if (q === "1") localStorage.setItem("wetter_winter", "1");
+        if (q === "0") localStorage.removeItem("wetter_winter");
+        return localStorage.getItem("wetter_winter") === "1" && localStorage.getItem("wetter_mode") === "karsten";
+      } catch (e) { return false; }
+    }
+    // Schneedecke wächst nach dem Einschalten langsam auf (SNOW_GROW ms), dann bleibt sie liegen.
+    // Test: window.__snow.set(0..1) setzt die Menge fest, __snow.set(null) gibt sie frei.
+    const SNOW_GROW = 45000;
+    const SNOW = { t0: null, override: null };
+    window.__snow = { set: (v) => { SNOW.override = v; }, reset: () => { SNOW.t0 = null; } };
+    function snowAmount() {
+      if (SNOW.override !== null) return SNOW.override;
+      const t = deerClock();
+      if (SNOW.t0 === null) SNOW.t0 = t;
+      return c3((t - SNOW.t0) / SNOW_GROW, 0, 1);
+    }
+    function useSnowAmount(on) {
+      const [a, setA] = useState(0);
+      useEffect(() => {
+        if (!on) { setA(0); return; }
+        let raf = 0, last = -1;
+        const tick = () => {
+          const v = Math.round(snowAmount() * 200) / 200;     // in kleinen Stufen, schont das Rendering
+          if (v !== last) { last = v; setA(v); }
+          raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+        return () => cancelAnimationFrame(raf);
+      }, [on]);
+      return a;
+    }
+    // Schneefarbe nach Tageszeit (nachts bläulich-grau, tags fast weiß)
+    const SNOW_COL = { Nachts: ["#7c88a2", "#5d6884"], Morgens: ["#c0c7da", "#99a2bb"], Vormittags: ["#eef3fa", "#c4d0e2"],
+      Mittags: ["#f3f6fb", "#c9d4e5"], Nachmittags: ["#e9eef7", "#bcc8dc"], Abends: ["#a9b1c8", "#848da8"] };
+
+    // Glatter geschlossener Pfad durch Punkte (Catmull-Rom → Bézier)
+    function smoothPath(pts, closed) {
+      const n = pts.length, P = (i) => pts[closed ? (i + n) % n : c3(i, 0, n - 1)];
+      let d = "M" + pts[0][0].toFixed(1) + "," + pts[0][1].toFixed(1);
+      for (let i = 0; i < (closed ? n : n - 1); i++) {
+        const p0 = P(i - 1), p1 = P(i), p2 = P(i + 1), p3 = P(i + 2);
+        const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6], c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+        d += "C" + c1[0].toFixed(1) + "," + c1[1].toFixed(1) + " " + c2[0].toFixed(1) + "," + c2[1].toFixed(1) + " " + p2[0].toFixed(1) + "," + p2[1].toFixed(1);
+      }
+      return d + (closed ? "Z" : "");
+    }
+    // Schneehaube über einer Linie von (x0,y) bis (x1,y): Höhe h, sanft gewellt, Enden rund
+    function snowMound(x0, x1, y, h, seed) {
+      if (h < 0.15) return "";
+      const pts = [[x0 - 0.8, y + 0.6]], n = Math.max(3, Math.round((x1 - x0) / 7));
+      for (let i = 0; i <= n; i++) {
+        const t = i / n, x = x0 + (x1 - x0) * t;
+        const edge = Math.sin(Math.PI * Math.min(1, Math.min(t, 1 - t) * 4 + 0.15));
+        pts.push([x, y - h * edge * (0.85 + 0.15 * Math.sin(seed + t * 9))]);
+      }
+      pts.push([x1 + 0.8, y + 0.6]);
+      return smoothPath(pts, true);
+    }
+    // Schnee auf dem Dach: liegt außen auf beiden Schrägen, am First dünner, an der Traufe leicht überhängend
+    function roofSnow(a) {
+      const A = [55, 148], P = [200, 62], B = [345, 148], h = 1.2 + 6.5 * a, N = 14;
+      const edge = (S, sign) => {                 // Außenkante von der Traufe S zum First P
+        const dx = P[0] - S[0], dy = P[1] - S[1], L = Math.hypot(dx, dy), ux = dx / L, uy = dy / L;
+        const nx = sign * uy, ny = -sign * ux;    // Normale nach außen (oben)
+        const pts = [];
+        for (let i = 0; i <= N; i++) {
+          const t = i / N, th = h * (1 - 0.45 * Math.pow(t, 3)) * (0.9 + 0.1 * Math.sin(t * 17 + sign * 2));
+          pts.push([S[0] + dx * t + nx * th, S[1] + dy * t + ny * th]);
+        }
+        return pts;
+      };
+      const L = edge(A, 1), R = edge(B, -1).reverse();
+      const innerR = [0.75, 0.5, 0.25].map((t) => [B[0] + (P[0] - B[0]) * t - 0.6, B[1] + (P[1] - B[1]) * t + 1.1]);
+      // Ring: Traufe links (rund, leicht überhängend) → Außenkante hoch → First → runter → Traufe rechts → innen zurück
+      const ring = [[A[0] - 1.5, A[1] + h * 0.7], [A[0] - 3, A[1] + h * 0.15]]
+        .concat(L).concat(R.slice(1))
+        .concat([[B[0] + 3, B[1] + h * 0.15], [B[0] + 1.5, B[1] + h * 0.7], [B[0] - 5, B[1] + 1.3]])
+        .concat(innerR).concat([[P[0], P[1] + 1.6]])
+        .concat([0.25, 0.5, 0.75].map((t) => [P[0] + (A[0] - P[0]) * t + 0.6, P[1] + (A[1] - P[1]) * t + 1.1]))
+        .concat([[A[0] + 5, A[1] + 1.3]]);
+      return smoothPath(ring, true);
+    }
+
+    // Schneedecke in der Szene. part="ground": Boden (unter dem Haus), "house": Dach/Schornstein/Fensterbänke/Tür,
+    // "garden": Zaun, Briefkasten, Büsche
+    function SnowCover({ part, a, slotName }) {
+      if (a <= 0.001) return null;
+      const [col, shade] = SNOW_COL[slotName] || SNOW_COL.Vormittags;
+      const e = Math.pow(a, 0.8);
+      if (part === "ground") {
+        return (
+          <g opacity={Math.min(1, a * 1.6)}>
+            <path d={smoothPath([[-30, 320], [-30, 292], [40, 284 - 3 * e], [110, 281 - 2 * e], [180, 279 - 2.5 * e], [260, 277 - 2 * e], [340, 279 - 3 * e], [410, 281 - 2 * e], [480, 285 - 2.5 * e], [550, 292], [550, 320]], false) + "Z"}
+              fill={col} opacity={0.35 + 0.55 * e} />
+            <ellipse cx="260" cy="314" rx="300" ry="18" fill={shade} opacity={0.25 * e} />
+          </g>
+        );
+      }
+      const op = Math.min(1, a * 3);
+      if (part === "house") {
+        return (
+          <g opacity={op}>
+            <path d={roofSnow(e)} fill={col} />
+            <path d={"M58,149.5 L200,65 L342,149.5"} stroke={shade} strokeWidth={0.9} fill="none" opacity={0.5 * e} />
+            <path d={snowMound(271, 299, 84.5, 1 + 5 * e, 1)} fill={col} />
+            <path d={snowMound(95.5, 164.5, 212.5, 0.6 + 3.2 * e, 2)} fill={col} />
+            <path d={snowMound(235.5, 304.5, 212.5, 0.6 + 3.2 * e, 3)} fill={col} />
+            <path d={smoothPath([[175, 218.5], [182, 214 - 2.2 * e], [200, 210.5 - 3 * e], [218, 214 - 2.2 * e], [225, 218.5], [200, 213]], true)} fill={col} />
+          </g>
+        );
+      }
+      return (
+        <g opacity={op}>
+          {[35, 48, 61, 74, 326, 339, 352, 365].map((x) => (
+            <ellipse key={x} cx={x + 1.5} cy={266.6 - 0.6 * e} rx={2.5 + 0.4 * e} ry={0.6 + 1.3 * e} fill={col} />
+          ))}
+          {/* Gartenweg: festgetretene Spur zur Tür */}
+          <path d="M200,281 Q194,291 186,306 Q200,309 214,306 Q206,291 200,281" fill={shade} opacity={0.55 * e} />
+          <path d={snowMound(35, 77, 273.2, 0.4 + 1.4 * e, 4)} fill={col} />
+          <path d={snowMound(326, 368, 273.2, 0.4 + 1.4 * e, 5)} fill={col} />
+          <path d={snowMound(334.5, 349.5, 253.5, 0.8 + 3 * e, 6)} fill={col} />
+          {[[90, 276, 18, 10], [80, 278, 12, 7], [310, 276, 18, 10], [320, 278, 12, 7]].map(([cx, cy, rx, ry], i) => (
+            <path key={i} d={smoothPath([[cx - rx * 0.92, cy - ry * 0.25], [cx - rx * 0.6, cy - ry * 0.85 - 1.5 * e], [cx, cy - ry - 2.6 * e], [cx + rx * 0.6, cy - ry * 0.85 - 1.5 * e],
+              [cx + rx * 0.92, cy - ry * 0.25], [cx + rx * 0.4, cy - ry * 0.55], [cx, cy - ry * 0.45], [cx - rx * 0.4, cy - ry * 0.6]], true)} fill={col} opacity={0.95} />
+          ))}
+        </g>
+      );
+    }
+
+    // Schneefall: eigenes 2D-Canvas über der Szene, drei Tiefen, weiches Pendeln
+    function Snowfall({ slotName }) {
+      const ref = useRef(null);
+      const live = useRef(slotName); live.current = slotName;
+      useEffect(() => {
+        const cv = ref.current; if (!cv) return;
+        const ctx = cv.getContext("2d"); if (!ctx) return;
+        const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+        const flakes = Array.from({ length: reduce ? 40 : 110 }, () => {
+          const z = rnd();                       // 0 = hinten, 1 = vorn
+          return { x: rnd() * 540 - 10, y: rnd() * 330 - 10, z, r: 0.7 + z * z * 2.3, v: 9 + z * 22, ph: rnd() * 6.3, sw: 4 + rnd() * 8, f: 0.3 + rnd() * 0.6 };
+        });
+        let raf = 0, last = deerClock();
+        const frame = () => {
+          raf = requestAnimationFrame(frame);
+          const now = deerClock(), dt = c3((now - last) / 1000, 0, 0.1); last = now;
+          const w = cv.clientWidth, h = cv.clientHeight; if (!w) return;
+          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+          const s = cv.width / 520;
+          ctx.setTransform(s, 0, 0, s, 0, 0);
+          ctx.clearRect(0, 0, 520, 320);
+          const night = live.current === "Nachts" ? 0.55 : live.current === "Abends" ? 0.75 : live.current === "Morgens" ? 0.85 : 1;
+          const t = now / 1000;
+          for (const p of flakes) {
+            p.y += p.v * dt * (reduce ? 0.4 : 1);
+            const x = p.x + Math.sin(t * p.f + p.ph) * p.sw + t * 2.5 * p.z % 540;
+            if (p.y > 312 + p.z * 8) { p.y = -6 - rnd() * 20; p.x = rnd() * 540 - 10; }
+            const xx = ((x % 540) + 540) % 540 - 10;
+            const al = (0.35 + 0.55 * p.z) * night;
+            ctx.globalAlpha = al * 0.35; ctx.fillStyle = "#ffffff";
+            ctx.beginPath(); ctx.arc(xx, p.y, p.r * 1.9, 0, 6.283); ctx.fill();
+            ctx.globalAlpha = al;
+            ctx.beginPath(); ctx.arc(xx, p.y, p.r, 0, 6.283); ctx.fill();
+          }
+          ctx.globalAlpha = 1;
+        };
+        raf = requestAnimationFrame(frame);
+        return () => cancelAnimationFrame(raf);
+      }, []);
+      return <canvas ref={ref} aria-hidden="true" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", borderRadius: 16 }} />;
+    }
+
+    function House({ slot, slotName, date, slotIdx, showBird, deerV2, winter }) {
       const sky = SKY[slotName];
       const kOn = isOn(slot.k), sOn = isOn(slot.s), eOn = isOn(slot.e), gOn = isOn(slot.g);
       const kErr = isError(slot.k), sErr = isError(slot.s), eErr = isError(slot.e), gErr = isError(slot.g);
@@ -1134,6 +1368,7 @@
       const kOffFill = kOn ? kFill : (isDay ? "#2a3548" : darkWin);
       const sOffFill = sOn ? sFill : (isDay ? "#2a3548" : darkWin);
       const trans = T("0.9s");
+      const snowA = useSnowAmount(!!winter);
 
       return (
         <div style={{ position: "relative", width: "100%", maxWidth: 580, margin: "0 auto" }}>
@@ -1188,6 +1423,7 @@
 
             {/* GROUND */}
             <ellipse cx="260" cy="305" rx="280" ry="30" fill={groundColor} opacity="0.8" style={{ transition: T("1s") }} />
+            {winter && <SnowCover part="ground" a={snowA} slotName={slotName} />}
 
             {/* HOUSE GROUP (centered +60px) */}
             <g transform="translate(60, 0)">
@@ -1272,6 +1508,8 @@
                 {eErr && <g><circle cx="216" cy="222" r="6" fill="rgba(20,20,30,0.8)" /><text x="216" y="226" textAnchor="middle" fontSize="10" fill={isFehler(slot.e)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}
               </g>
 
+              {winter && <SnowCover part="house" a={snowA} slotName={slotName} />}
+
               {/* BIRD (only in extended mode) — sitzt auf dem Dach und singt */}
               {showBird && gOn && <g transform="translate(180, 75)" style={{ transition: trans }}>
                 {/* Schwanzgefieder (nach hinten/links herausstehend) */}
@@ -1323,7 +1561,7 @@
               {showBird && gErr && !gOn && <g transform="translate(180, 75)"><circle cx="0" cy="0" r="6" fill="rgba(20,20,30,0.8)" /><text x="0" y="4" textAnchor="middle" fontSize="10" fill={isFehler(slot.g)?C.error:C.offline} fontFamily={ff} fontWeight="700">!</text></g>}
 
               {/* GARDEN */}
-              <path d="M200,280 Q195,290 188,305 Q200,308 212,305 Q205,290 200,280" fill={groundColor} opacity="0.6" style={{ transition: trans }} />
+              <path d="M200,280 Q195,290 188,305 Q200,308 212,305 Q205,290 200,280" fill={groundColor} opacity={0.6 * (1 - Math.min(1, snowA * 2))} style={{ transition: trans }} />
               {[35,48,61,74].map(x => (<g key={"fl"+x}><rect x={x} y="268" width="3" height="16" rx="0.5" fill={roofColor} style={{ transition: trans }} /><circle cx={x+1.5} cy="268" r="2" fill={roofColor} style={{ transition: trans }} /></g>))}
               <rect x="35" y="273" width="42" height="2.5" rx="1" fill={roofColor} style={{ transition: trans }} />
               {[326,339,352,365].map(x => (<g key={"fr"+x}><rect x={x} y="268" width="3" height="16" rx="0.5" fill={roofColor} style={{ transition: trans }} /><circle cx={x+1.5} cy="268" r="2" fill={roofColor} style={{ transition: trans }} /></g>))}
@@ -1333,6 +1571,7 @@
               ))}
               <rect x="340" y="258" width="3" height="22" fill="#4a4a55" />
               <rect x="335" y="253" width="14" height="10" rx="2" fill="#4a4a55" />
+              {winter && <SnowCover part="garden" a={snowA} slotName={slotName} />}
 
               {use3d ? (
                 <g ref={zzzRef} opacity="0" fontFamily="Georgia, 'Times New Roman', serif" fontWeight="bold">
@@ -1555,8 +1794,9 @@
             </React.Fragment>}
           </g>
         </svg>
-        {use3d && <Deer3D sleeping={deerSleeping} isDayish={isDay || isDawn || isDusk} zzzRef={zzzRef}
+        {use3d && <Deer3D sleeping={deerSleeping} isDayish={isDay || isDawn || isDusk} zzzRef={zzzRef} winter={!!winter}
           light={isDay ? 1.12 : isDawn ? 0.9 : isDusk ? 0.72 : 0.55} onFail={() => setDeer3dFailed(true)} />}
+        {winter && <Snowfall slotName={slotName} />}
         </div>
       );
     }
@@ -1881,6 +2121,7 @@
 
     function DashboardMain({ history: allHistory, lastPoll, backendVersion, showBird, onToggleBird }) {
       const deer = useDeerMode(showBird);
+      const [winter] = useState(winterPreviewOn);
       const [week, setWeek] = useState(0);
       const [selDay, setSelDay] = useState(0);
       const [selSlot, setSelSlot] = useState(getNowSlot());
@@ -2098,7 +2339,7 @@
                 <div style={{ maxWidth: 604, margin: "0 auto", padding: mob ? "0 8px" : "0 12px" }}>
                 {/* HOUSE */}
                 <div style={{ paddingTop: mob ? 4 : 8 }}>
-                  <House slot={slot} slotName={slotName} date={day.date} slotIdx={selSlot} showBird={showBird} deerV2={deer.use3d} />
+                  <House slot={slot} slotName={slotName} date={day.date} slotIdx={selSlot} showBird={showBird} deerV2={deer.use3d} winter={winter} />
                   {deer.panel && <DeerPreviewPanel />}
                 </div>
 
