@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.18.0
+  Version: 1.19.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.18.0";
+    const FRONTEND_VERSION = "1.19.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -617,439 +617,392 @@
       return { season, xmas };
     }
 
-    function buildScene3D(T, scene) {
+    function buildScene3D(T, scene, renderer) {
+      // Gestaltungsrahmen: docs/DESIGN.md. Spielzeug-Diorama, eine Toon-Bildsprache, ein Licht mit Schatten.
       const TS = Math.sin(D3.TILT), TC = Math.cos(D3.TILT), GR = D3.GROUND;
-      const zG = (sy) => (sy - GR) / TS;                       // Tiefe, in der der Boden bei SVG-y liegt
-      const yAt = (sy, z) => (GR - sy + z * TS) / TC;          // Welt-y, das in Tiefe z bei SVG-y erscheint
-      const ZH = zG(278), DEP = 60;                             // Hausfront, Haustiefe
-      const PL = new T.PlaneGeometry(1, 1), BOX = new T.BoxGeometry(1, 1, 1), SPH = new T.SphereGeometry(1, 20, 14);
+      const zG = (sy) => (sy - GR) / TS;
+      const yAt = (sy, z) => (GR - sy + z * TS) / TC;
+      const ZH = zG(278), DEP = 64;
+      const PL = new T.PlaneGeometry(1, 1), BOX = new T.BoxGeometry(1, 1, 1), SPH = new T.SphereGeometry(1, 24, 16);
       const root = new T.Group(); scene.add(root);
-      // Farben mit weichem Übergang (wie die CSS-Transitions im SVG)
-      const tints = [];
-      const basic = (key, opts) => {
-        const m = new T.MeshBasicMaterial(Object.assign({ color: 0x000000 }, opts || {}));
-        if (key) tints.push({ m, key, op: opts && opts.opacity !== undefined ? opts.opacity : 1 });
-        return m;
-      };
-      const fixed = (hex, opts) => new T.MeshBasicMaterial(Object.assign({ color: hex }, opts || {}));
-      const grad = new T.DataTexture(new Uint8Array([150, 150, 150, 255, 205, 205, 205, 255, 255, 255, 255, 255]), 3, 1, T.RGBAFormat);
+      const grad = new T.DataTexture(new Uint8Array([130, 130, 130, 255, 195, 195, 195, 255, 255, 255, 255, 255]), 3, 1, T.RGBAFormat);
       grad.minFilter = grad.magFilter = T.NearestFilter; grad.needsUpdate = true;
       const toon = (hex) => new T.MeshToonMaterial({ color: hex, gradientMap: grad });
+      const tints = [];
+      const basic = (key, opts) => { const m = new T.MeshBasicMaterial(Object.assign({ color: 0x000000 }, opts || {})); tints.push({ m, key }); return m; };
+      const fixed = (hex, opts) => new T.MeshBasicMaterial(Object.assign({ color: hex }, opts || {}));
+      const shadowy = (o, cast, recv) => { o.traverse((c) => { if (c.isMesh) { c.castShadow = cast; c.receiveShadow = recv; } }); return o; };
       const add = (mesh, parent) => { (parent || root).add(mesh); return mesh; };
-      // Rechteck auf einer senkrechten Ebene in Tiefe z, in SVG-Koordinaten (absolut)
-      const rect = (x, y, w, h, mat, z) => {
-        const m = new T.Mesh(PL, mat); m.scale.set(w, h / TC, 1); m.position.set(x + w / 2, yAt(y + h / 2, z), z); return add(m);
-      };
-      // Quader, dessen Vorderseite in Tiefe z das SVG-Rechteck abdeckt
-      const box = (x, y, w, h, d, mat, z) => {
-        const m = new T.Mesh(BOX, mat); m.scale.set(w, h / TC, d); m.position.set(x + w / 2, yAt(y + h / 2, z), z - d / 2); return add(m);
-      };
+      const mesh = (geo, mat, cast, recv) => { const m = new T.Mesh(geo, mat); m.castShadow = !!cast; m.receiveShadow = !!recv; return m; };
+      const rect = (x, y, w, h, mat, z) => { const m = mesh(PL, mat); m.scale.set(w, h / TC, 1); m.position.set(x + w / 2, yAt(y + h / 2, z), z); return add(m); };
+      const box = (x, y, w, h, d, mat, z, cast, recv) => { const m = mesh(BOX, mat, cast !== false, recv !== false); m.scale.set(w, h / TC, d); m.position.set(x + w / 2, yAt(y + h / 2, z), z - d / 2); return add(m); };
+      const ball = (mat, x, y, z, rx, ry, rz, parent) => { const m = mesh(SPH, mat, true, true); m.scale.set(rx, ry === undefined ? rx : ry, rz === undefined ? rx : rz); m.position.set(x, y, z); return add(m, parent); };
       const spots = [];
+      let s0 = 17; const rnd = () => (s0 = (s0 * 16807) % 2147483647) / 2147483647;
 
-      // ── Boden: Rückkante folgt der Horizont-Ellipse des SVG ──
-      const gs = new T.Shape();
-      const topY = (x) => 305 - 30 * Math.sqrt(Math.max(0, 1 - Math.pow((x - 260) / 280, 2)));
-      gs.moveTo(-40, -90);
-      for (let x = -40; x <= 560; x += 10) gs.lineTo(x, (GR - topY(x)) / TS);
-      gs.lineTo(560, -90); gs.lineTo(-40, -90);
-      const ground = add(new T.Mesh(new T.ShapeGeometry(gs), basic("ground", { transparent: true, opacity: 0.8 })));
-      ground.rotation.x = -Math.PI / 2;
-      // Gartenweg zur Tür
-      const ps = new T.Shape();
-      ps.moveTo(255, -ZH - 1); ps.lineTo(265, -ZH - 1); ps.quadraticCurveTo(268, 60, 274, 8); ps.lineTo(246, 8); ps.quadraticCurveTo(252, 60, 255, -ZH - 1);
-      const path = add(new T.Mesh(new T.ShapeGeometry(ps), basic("path", { transparent: true, opacity: 0.55 })));
-      path.rotation.x = -Math.PI / 2; path.position.y = 0.15;
+      // ── Licht: Hemisphäre + Sonne/Mond mit weichem Schatten, Fensterlicht nachts ──
+      renderer.shadowMap.enabled = true; renderer.shadowMap.type = T.PCFSoftShadowMap;
+      const hemi = new T.HemisphereLight(0xffffff, 0x445533, 0.6); scene.add(hemi);
+      const sun = new T.DirectionalLight(0xffffff, 0.6); sun.castShadow = true;
+      sun.shadow.mapSize.set(1536, 1536); sun.shadow.bias = -0.0008; sun.shadow.normalBias = 0.6; sun.shadow.radius = 3;
+      Object.assign(sun.shadow.camera, { left: -340, right: 340, top: 260, bottom: -260, near: 1, far: 1600 });
+      sun.target.position.set(260, 40, -120); scene.add(sun, sun.target);
+      const winLight = (hex, x, y, z) => { const p = new T.PointLight(hex, 0, 120, 1.8); p.position.set(x, y, z); scene.add(p); return p; };
 
-      // ── Haus ──
-      const wallF = basic("wall"), wallS = basic("wallDark");
-      box(135, 148, 250, 130, DEP, [wallS, wallS, wallS, wallS, wallF, wallS], ZH);
-      [168, 188, 208, 228, 248].forEach((y) => rect(140, y - 0.15, 240, 0.3, basic("siding", { transparent: true, opacity: 1 }), ZH + 0.05));
-      // Dach: Giebeldreieck vorn, zwei Dachplatten mit Überstand, First
-      const yE = yAt(148, ZH), yA = yAt(62, ZH);
-      const tri = new T.Shape(); tri.moveTo(115, yE); tri.lineTo(260, yA); tri.lineTo(405, yE); tri.lineTo(115, yE);
-      const gable = add(new T.Mesh(new T.ShapeGeometry(tri), basic("roof"))); gable.position.z = ZH + 0.1;
-      const roofTop = basic("roofTop"), roofEdge = basic("roofEdge"), roofUnder = basic("roofUnder");
-      const slopeA = Math.atan2(yA - yE, 145), slopeL = Math.hypot(145, yA - yE), RT = 1.8, OV = 7;
-      // Dachplatten: Unterseite genau auf der Giebelkante, 8 Einheiten Überstand an der Traufe
-      [-1, 1].forEach((sd) => {
-        const slab = new T.Mesh(BOX, [roofEdge, roofEdge, roofTop, roofUnder, roofEdge, roofEdge]);
-        slab.scale.set(slopeL + 8, RT, DEP + 2 * OV);
-        const ca = Math.cos(slopeA), sa = Math.sin(slopeA);
-        const ux = sd < 0 ? ca : -ca, uy = sa;               // Richtung Traufe → First
-        const nx = sd < 0 ? -sa : sa, ny = ca;                // Normale nach außen
-        const mx = ((sd < 0 ? 115 : 405) + 260) / 2, my = (yE + yA) / 2;
-        slab.position.set(mx + nx * RT / 2 - ux * 4, my + ny * RT / 2 - uy * 4, ZH - DEP / 2);
-        slab.rotation.z = sd < 0 ? slopeA : -slopeA;
-        add(slab);
+      // ── Hintergrund: zwei Hügelreihen mit fernen Bäumchen, im Dunst ──
+      const hillFar = fixed(0x000000), hillNear = fixed(0x000000), hillTree = fixed(0x000000);
+      [[-60, -330, 190, 64], [150, -340, 170, 52], [330, -335, 200, 70], [560, -330, 170, 60]].forEach(([x, z, r, h]) => { const m = mesh(SPH, hillFar); m.scale.set(r, h / TC, 40); m.position.set(x, 0, z); add(m); });
+      [[20, -270, 170, 42], [250, -280, 160, 30], [500, -270, 180, 46]].forEach(([x, z, r, h]) => { const m = mesh(SPH, hillNear); m.scale.set(r, h / TC, 40); m.position.set(x, 0, z); add(m); });
+      [[60, -262, 9, 34], [92, -264, 7, 30], [430, -262, 10, 38], [462, -266, 7, 31], [488, -260, 8, 35], [-6, -258, 8, 33]].forEach(([x, z, r, h]) => {
+        const st = mesh(BOX, hillTree); st.scale.set(2, h * 0.45, 2); st.position.set(x, h * 0.22, z); add(st);
+        const cr = mesh(SPH, hillTree); cr.scale.set(r, r * 1.15, r); cr.position.set(x, h * 0.6, z); add(cr);
       });
-      const ridge = add(new T.Mesh(new T.CylinderGeometry(1.3, 1.3, DEP + 2 * OV, 10), roofTop));
-      ridge.rotation.x = Math.PI / 2; ridge.position.set(260, yA + RT * 0.9, ZH - DEP / 2);
-      // Schornstein (fest grau wie im SVG), steht auf der rechten Dachfläche
-      const chimZ = -205;
-      const chim = fixed(0x4a4a55), chimCap = fixed(0x5a5a62), chimTop = fixed(0x62626c);
-      { const m = new T.Mesh(BOX, chim); m.scale.set(20, 46, 20); m.position.set(345, 172, chimZ - 10); add(m); }
-      { const m = new T.Mesh(BOX, [chimCap, chimCap, chimTop, chimCap, chimCap, chimCap]); m.scale.set(26, 7, 26); m.position.set(345, 198.5, chimZ - 10); add(m); }
-      spots.push([345, 202, chimZ - 10]);
 
-      // Fenster: dunkler Grund, vier Scheiben (Licht je Sensor), Rahmen, Sprossen, Fensterbank mit Tiefe
+      // ── Boden ──
+      const gs = new T.Shape();
+      const topY = (x) => 300 - 22 * Math.sqrt(Math.max(0, 1 - Math.pow((x - 260) / 300, 2)));
+      gs.moveTo(-60, -110);
+      for (let x = -60; x <= 580; x += 10) gs.lineTo(x, (GR - topY(x)) / TS);
+      gs.lineTo(580, -110); gs.lineTo(-60, -110);
+      const groundM = toon(0x4f7a45);
+      const ground = add(mesh(new T.ShapeGeometry(gs, 24), groundM, false, true)); ground.rotation.x = -Math.PI / 2;
+      // Wegsteine: führen in sanftem Bogen von vorn zur Tür
+      const stoneM = toon(0x9a9a92);
+      [[262, ZH + 14, 9], [258, ZH + 34, 9.5], [252, ZH + 56, 10], [246, ZH + 80, 10.5], [242, ZH + 106, 11], [241, ZH + 134, 11.5], [244, ZH + 164, 12]].forEach(([x, z, r], i) => {
+        const m = add(mesh(new T.CylinderGeometry(r, r * 1.04, 1.6, 22), stoneM, false, true)); m.scale.z = 0.62; m.position.set(x + (i % 2 ? 2 : -2), 0.5, z); m.rotation.y = (rnd() - 0.5) * 0.4;
+      });
+
+      // ── Haus (Spielzeugproportionen, frontal) ──
+      const wallM = toon(0x56628a), plinthM = toon(0x3f4762), roofM = toon(0x7a573c), roofEdgeM = toon(0x684a33);
+      const frameM = toon(0xd9d2c3), sillM = toon(0xcfc6b4), chimM = toon(0x8a6a58), chimCapM = toon(0x6b6670);
+      box(135, 148, 250, 130, DEP, wallM, ZH);
+      box(131, 266, 258, 12, DEP + 4, plinthM, ZH + 2);
+      const yE = yAt(148, ZH), yA = yAt(62, ZH);
+      const tri = new T.Shape(); tri.moveTo(135, yE); tri.lineTo(260, yE + (yA - yE) * (125 / 145)); tri.lineTo(385, yE); tri.lineTo(135, yE);
+      const gable = add(mesh(new T.ShapeGeometry(tri), wallM, false, true)); gable.position.z = ZH;
+      { const back = gable.clone(); back.position.z = ZH - DEP; add(back); }
+      const slopeA = Math.atan2(yA - yE, 145), slopeL = Math.hypot(145, yA - yE), RT = 5, OV = 9;
+      [-1, 1].forEach((sd) => {
+        const slab = mesh(BOX, [roofEdgeM, roofEdgeM, roofM, roofEdgeM, roofEdgeM, roofEdgeM], true, true);
+        slab.scale.set(slopeL + 10, RT, DEP + 2 * OV);
+        const ca = Math.cos(slopeA), sa = Math.sin(slopeA), ux = sd < 0 ? ca : -ca, uy = sa, nx = sd < 0 ? -sa : sa, ny = ca;
+        const mx = ((sd < 0 ? 115 : 405) + 260) / 2, my = (yE + yA) / 2;
+        slab.position.set(mx + nx * RT / 2 - ux * 5, my + ny * RT / 2 - uy * 5, ZH - DEP / 2);
+        slab.rotation.z = sd < 0 ? slopeA : -slopeA; add(slab);
+      });
+      { const r = add(mesh(new T.CylinderGeometry(2.6, 2.6, DEP + 2 * OV, 14), roofEdgeM, true, true)); r.rotation.x = Math.PI / 2; r.position.set(260, yA + RT * 0.55 / Math.cos(slopeA), ZH - DEP / 2); }
+      const chimZ = ZH - DEP * 0.55;
+      { const c = add(mesh(BOX, chimM, true, true)); c.scale.set(22, 56, 18); c.position.set(342, 168, chimZ); }
+      { const c = add(mesh(BOX, chimCapM, true, true)); c.scale.set(28, 6, 24); c.position.set(342, 198, chimZ); }
+      spots.push([342, 202, chimZ]);
+      // Fenster: Rahmen steht vor, Scheiben liegen zurück, Fensterbank mit Tiefe
       const win = (x0, key) => {
-        const zf = ZH + 0.2;
-        rect(x0, 165, 60, 48, basic("winBg"), zf);
-        const panes = [[x0 + 2, 167, 26, 21, 0.85], [x0 + 32, 167, 26, 21, 0.75], [x0 + 2, 191, 26, 20, 0.7], [x0 + 32, 191, 26, 20, 0.8]];
-        const mats = panes.map(([x, y, w, h, op]) => { const m = basic(key + "Pane", { transparent: true, opacity: 1 }); m.userData.onOp = op; rect(x, y, w, h, m, zf + 0.1); return m; });
-        const fr = basic("frame");
-        [[x0, 164.25, 60, 1.5], [x0, 211.25, 60, 1.5], [x0 - 0.75, 165, 1.5, 48], [x0 + 59.25, 165, 1.5, 48], [x0 + 29.25, 165, 1.5, 48], [x0, 188.25, 60, 1.5]]
-          .forEach(([x, y, w, h]) => rect(x, y, w, h, fr, zf + 0.3));
-        const sill = basic("frame"), sillTop = basic("frameTop");
-        box(x0 - 4, 212, 68, 6, 7, [sill, sill, sillTop, sill, sill, sill], ZH + 6);
-        spots.push([x0 + 12, yAt(212, ZH + 3) + 0.5, ZH + 3], [x0 + 48, yAt(212, ZH + 3) + 0.5, ZH + 3]);
-        const glow = new T.Mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending }));
-        glow.scale.set(96, 80, 1); glow.position.set(x0 + 30, yAt(189, ZH + 1), ZH + 1); add(glow);
-        const reflex = rect(x0 + 3, 168, 8, 10, fixed(0xffffff, { transparent: true, opacity: 0 }), zf + 0.2);
-        return { mats, glow, reflex };
+        rect(x0, 165, 60, 48, basic("winBg"), ZH + 0.2);
+        const panes = [[x0 + 3, 168, 25, 19, 0.85], [x0 + 32, 168, 25, 19, 0.75], [x0 + 3, 191, 25, 19, 0.7], [x0 + 32, 191, 25, 19, 0.8]];
+        const mats = panes.map(([x, y, w, h, op]) => { const m = basic(key + "Pane", { transparent: true, opacity: 1 }); m.userData.onOp = op; rect(x, y, w, h, m, ZH + 0.4); return m; });
+        [[x0 - 3, 162, 66, 4], [x0 - 3, 210, 66, 4], [x0 - 3, 162, 4, 52], [x0 + 59, 162, 4, 52]].forEach(([x, y, w, h]) => box(x, y, w, h, 3, frameM, ZH + 3));
+        [[x0 + 28.5, 165, 3, 46], [x0, 187.5, 60, 3]].forEach(([x, y, w, h]) => box(x, y, w, h, 1.6, frameM, ZH + 1.8));
+        box(x0 - 7, 213, 74, 5, 9, sillM, ZH + 9);
+        spots.push([x0 + 12, yAt(213, ZH + 5) + 0.6, ZH + 5], [x0 + 48, yAt(213, ZH + 5) + 0.6, ZH + 5]);
+        const glow = add(mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending })));
+        glow.scale.set(78, 64, 1); glow.position.set(x0 + 30, yAt(189, ZH + 4), ZH + 4);
+        return { mats, glow };
       };
       const W = { k: win(160, "k"), s: win(300, "s") };
+      // Tür mit Rahmen, kleinem Vordach und Stufe
+      const dz = ZH + 0.3;
+      const doorM = basic("door"); rect(243, 220, 34, 58, doorM, dz);
+      const panelM = basic("panel");
+      [[248, 225, 24, 17], [248, 248, 24, 20]].forEach(([x, y, w, h]) => rect(x, y, w, h, panelM, dz + 0.2));
+      const knob = add(mesh(new T.SphereGeometry(2.1, 14, 10), basic("knob"))); knob.position.z = dz + 1.2;
+      const doorLight = rect(243, 220, 9, 58, fixed(0x9fe0a2, { transparent: true, opacity: 0 }), dz + 0.35);
+      [[239, 216, 42, 4], [239, 216, 4, 62], [277, 216, 4, 62]].forEach(([x, y, w, h]) => box(x, y, w, h, 3, frameM, ZH + 3));
+      box(236, 276, 48, 4, 12, sillM, ZH + 12);
+      // Vordach: zwei kleine Dachplatten auf Konsolen
+      { const cy = yAt(206, ZH + 14), cz = ZH + 9;
+        [-1, 1].forEach((sd) => { const p = mesh(BOX, [roofEdgeM, roofEdgeM, roofM, roofEdgeM, roofEdgeM, roofEdgeM], true, true); p.scale.set(30, 3, 22); p.rotation.z = sd * -0.42; p.position.set(260 + sd * 13.5, cy, cz); add(p); });
+        spots.push([260, cy + 7, cz]); }
+      // Lichtquellen der Fenster und der Tür (nachts)
+      // tief und vor dem Haus: Licht fällt auf Rasen, Büsche und Reh, nicht flächig auf die Wand
+      const WL = { k: winLight(0xffcf6a, 190, 16, ZH + 48), s: winLight(0x7fb4e6, 330, 16, ZH + 48), e: winLight(0x8fd896, 260, 10, ZH + 40) };
 
-      // Tür
-      const dz = ZH + 0.2;
-      rect(241, 218, 38, 60, fixed(0x3a3a42), dz);
-      const doorM = basic("door"); rect(243, 220, 34, 56, doorM, dz + 0.1);
-      const panelM = basic("panel"), panelS = basic("panelStroke");
-      [[247, 224, 26, 18], [247, 248, 26, 20]].forEach(([x, y, w, h]) => { rect(x - 0.25, y - 0.25, w + 0.5, h + 0.5, panelS, dz + 0.2); rect(x, y, w, h, panelM, dz + 0.3); });
-      const knob = add(new T.Mesh(new T.CircleGeometry(2, 16), basic("knob"))); knob.position.z = dz + 0.4;
-      const doorLight = rect(243, 220, 10, 56, fixed(0x8fce92, { transparent: true, opacity: 0 }), dz + 0.35);
-      { const sill = basic("frame"), top = basic("frameTop"); box(238, 276, 44, 4, 8, [sill, sill, top, sill, sill, sill], ZH + 8); }
-      { const crv = new T.QuadraticBezierCurve3(new T.Vector3(236, yAt(218, ZH + 1), ZH + 1), new T.Vector3(260, yAt(202, ZH + 1), ZH + 1), new T.Vector3(284, yAt(218, ZH + 1), ZH + 1));
-        add(new T.Mesh(new T.TubeGeometry(crv, 20, 0.9, 6), roofEdge));
-        spots.push([260, yAt(210, ZH + 1) + 1, ZH + 2]); }
-      // Lichtschein auf dem Boden (nachts)
-      const pool = (x, sy, rx, ry, hex) => {
-        const m = add(new T.Mesh(new T.CircleGeometry(1, 28), new T.MeshBasicMaterial({ color: hex, transparent: true, opacity: 0, depthWrite: false })));
-        m.rotation.x = -Math.PI / 2; m.scale.set(rx, ry / TS, 1); m.position.set(x, 0.2, zG(sy)); return m;
-      };
-      const pools = { k: pool(190, 288, 35, 6, C.kitchen.on), s: pool(330, 288, 35, 6, C.tv.on), e: pool(260, 292, 20, 5, C.door.on) };
-
-      // ── Garten: Zaun, Büsche, Briefkasten ──
-      const ZF = zG(284), fenceM = basic("roof"), fenceTop = basic("roofTop");
-      const postH = yAt(268, ZF);
-      [95, 108, 121, 134, 386, 399, 412, 425].forEach((x) => {
-        const p = add(new T.Mesh(new T.CylinderGeometry(1.5, 1.5, postH, 8), fenceM)); p.position.set(x + 1.5, postH / 2, ZF);
-        const c = add(new T.Mesh(SPH, fenceTop)); c.scale.setScalar(2); c.position.set(x + 1.5, postH, ZF);
-        spots.push([x + 1.5, postH + 2, ZF]);
-      });
-      [95, 386].forEach((x) => { const r = new T.Mesh(BOX, [fenceM, fenceM, fenceTop, fenceM, fenceM, fenceM]); r.scale.set(42, 2.5 / TC, 1.8); r.position.set(x + 21, yAt(274.25, ZF), ZF + 0.5); add(r); });
-      { const z = zG(281), mb = fixed(0x4a4a55), mt = fixed(0x55555f);
-        const p = add(new T.Mesh(BOX, mb)); p.scale.set(3, yAt(258, z), 3); p.position.set(401.5, yAt(258, z) / 2, z);
-        const bx = add(new T.Mesh(BOX, [mb, mb, mt, mb, mb, mb])); bx.scale.set(14, 10 / TC, 10); bx.position.set(402, yAt(258, z), z);
-        spots.push([402, yAt(253, z) + 0.5, z]); }
-
-      // ── Bäume ──
-      const bark = toon(0x5c4030), barkDark = toon(0x4a3326);
-      const leafA = toon(0x3d6b3a), leafB = toon(0x4f8045), leafC = toon(0x5e9050);
-      const limb = (parent, x0, y0, z0, len, ang, tilt, r0, r1, mat) => {
-        const g = new T.Group(); g.position.set(x0, y0, z0); g.rotation.set(tilt, 0, ang); parent.add(g);
-        const c = new T.Mesh(new T.CylinderGeometry(r1, r0, len, 7), mat || bark); c.position.y = len / 2; g.add(c);
-        const tip = new T.Object3D(); tip.position.y = len; g.add(tip);
-        return tip;
-      };
-      // Cartoon-Bäume im Toon-Stil des Rehs: dicker, geschwungener Stamm mit Wurzelansatz, wenige kräftige Äste,
-      // Krone aus runden Blattballen. Jeder Ballen ist dicht mit großen, schuppig überlappenden Blättern bedeckt
-      // (InstancedMesh, Farbe je Blatt: oben/vorn gelbgrün hell, unten/innen bläulich-grün dunkel).
-      const LEAF_GEO = (() => {
-        const s = new T.Shape(); s.moveTo(0, -1);
-        s.bezierCurveTo(0.95, -0.85, 0.95, 0.45, 0, 1); s.bezierCurveTo(-0.95, 0.45, -0.95, -0.85, 0, -1);
-        return new T.ShapeGeometry(s, 6);
-      })();
-      const leafMat = new T.MeshToonMaterial({ color: 0xffffff, gradientMap: grad, side: T.DoubleSide });
-      const barkM = toon(0x8a5a3a), barkLight = toon(0x9c6a46);
-      const tubeMesh = (segs, sides) => {
-        const pos = [], nor = [], idx = [], up = new T.Vector3(0, 1, 0), side = new T.Vector3(1, 0, 0);
-        for (const [a, b, r0, r1] of segs) {
-          const d = b.clone().sub(a).normalize();
-          const u = Math.abs(d.y) > 0.9 ? side.clone().cross(d).normalize() : up.clone().cross(d).normalize();
-          const v = d.clone().cross(u).normalize();
-          const base = pos.length / 3;
-          for (let ring = 0; ring < 2; ring++) {
-            const c = ring ? b : a, r = ring ? r1 : r0;
-            for (let i = 0; i < sides; i++) {
-              const ang = i / sides * Math.PI * 2, n = u.clone().multiplyScalar(Math.cos(ang)).addScaledVector(v, Math.sin(ang));
-              pos.push(c.x + n.x * r, c.y + n.y * r, c.z + n.z * r); nor.push(n.x, n.y, n.z);
-            }
-          }
-          for (let i = 0; i < sides; i++) {
-            const i2 = (i + 1) % sides;
-            idx.push(base + i, base + sides + i, base + i2, base + i2, base + sides + i, base + sides + i2);
-          }
+      // ── Garten: Lattenzaun, Büsche, Briefkasten, Blumen, Grasbüschel ──
+      const woodM = toon(0xc4a07a);
+      const fence = (x0, x1, z) => {
+        for (let x = x0; x <= x1; x += 9) {
+          const p = add(mesh(BOX, woodM, true, true)); p.scale.set(5, 22, 2.2); p.position.set(x, 11, z);
+          const tip = add(mesh(new T.CylinderGeometry(0, 3.5, 4, 4), woodM, true, true)); tip.rotation.y = Math.PI / 4; tip.scale.set(1, 1, 0.45); tip.position.set(x, 24, z);
+          if ((x - x0) % 27 === 0) spots.push([x, 27, z]);
         }
-        const g = new T.BufferGeometry();
-        g.setAttribute("position", new T.Float32BufferAttribute(pos, 3)); g.setAttribute("normal", new T.Float32BufferAttribute(nor, 3)); g.setIndex(idx);
+        [7, 16].forEach((y) => { const r = add(mesh(BOX, woodM, true, true)); r.scale.set(x1 - x0 + 6, 2.6, 1.6); r.position.set((x0 + x1) / 2, y, z - 1.8); });
+      };
+      fence(62, 125, -128); fence(396, 432, -128);
+      const bushM = toon(0x3d6640), bushDark = toon(0x325836);
+      const bush = (x, z, r, parts) => {
+        const g = new T.Group(); g.position.set(x, 0, z); add(g);
+        parts.forEach(([dx, dy, dz, rr], i) => ball(i % 3 === 2 ? bushDark : bushM, dx * r, (dy + 0.6) * r, dz * r, rr * r, rr * r * 0.88, rr * r * 0.85, g));
+        spots.push([x, r * 1.55, z]);
         return g;
       };
-      // Gebogener Ast als Kette kurzer Segmente entlang einer quadratischen Kurve
-      const bend = (segs, a, ctrl, b, r0, r1, n) => {
-        const crv = new T.QuadraticBezierCurve3(a, ctrl, b);
-        let prev = crv.getPoint(0);
-        for (let i = 1; i <= n; i++) { const p = crv.getPoint(i / n); segs.push([prev, p, r0 + (r1 - r0) * (i - 1) / n, r0 + (r1 - r0) * i / n]); prev = p; }
-      };
-      // Blattballen: Blätter auf der Kugeloberfläche, Spitze leicht nach unten-außen, wie Schuppen
-      const clumpLeaves = (list, c, R, n, sz, rnd) => {
-        const golden = Math.PI * (3 - Math.sqrt(5));
-        for (let i = 0; i < n; i++) {
-          const y = 1 - 2 * (i + 0.5) / n, rr = Math.sqrt(1 - y * y), a = i * golden;
-          const nrm = new T.Vector3(Math.cos(a) * rr, y, Math.sin(a) * rr);
-          if (nrm.z < -0.45) continue;                                  // Rückseite sieht niemand
-          const pos = c.clone().addScaledVector(nrm, R * (0.93 + rnd() * 0.1));
-          let tip = new T.Vector3(0, -1, 0).addScaledVector(nrm, nrm.y);   // Richtung „nach unten“ auf der Oberfläche
-          if (tip.lengthSq() < 1e-3) tip.set(1, 0, 0); tip.normalize();
-          tip.multiplyScalar(-1).lerp(nrm, 0.45).normalize();           // Spitze nach außen gekippt
-          const face = nrm.clone().addScaledVector(tip, -tip.dot(nrm)).normalize();
-          const x = tip.clone().cross(face).normalize();
-          const m = new T.Matrix4().makeBasis(x, tip, x.clone().cross(tip).normalize());
-          m.scale(new T.Vector3(sz * (0.85 + rnd() * 0.3), sz * (0.85 + rnd() * 0.3), 1)).setPosition(pos);
-          list.push({ m, p: pos, lit: 0.5 + 0.35 * nrm.y + 0.25 * nrm.z + (rnd() - 0.5) * 0.15 });
-        }
-      };
-      const finishLeaves = (parent, list, rnd) => {
-        for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
-        const mesh = new T.InstancedMesh(LEAF_GEO, leafMat, list.length);
-        list.forEach((L, i) => { mesh.setMatrixAt(i, L.m); mesh.setColorAt(i, new T.Color(0x6ab845)); });
-        mesh.instanceMatrix.needsUpdate = true; parent.add(mesh);
-        return mesh;
-      };
-      const cartoonTree = (x, z, seed, opt) => {
-        const t = new T.Group(); t.position.set(x, 0, z); add(t);
-        let s = seed; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
-        const segs = [], twigs = [], V = (a, b, c) => new T.Vector3(a, b, c);
-        const H = opt.h, R0 = opt.r;
-        // Stamm: unten breit, leicht geschwungen
-        bend(segs, V(0, -2, 0), V(opt.sway * H * 0.25, H * 0.2, 0), V(opt.sway * H * 0.08, H * 0.45, 0), R0, R0 * 0.62, 6);
-        // Wurzelansatz
-        [[-1, 0.3], [1, 0.2], [-0.3, 1], [0.5, 0.9]].forEach(([dx, dz]) =>
-          bend(segs, V(0, R0 * 1.6, 0), V(dx * R0 * 1.1, R0 * 0.3, dz * R0 * 0.6), V(dx * R0 * 2.1, -0.5, dz * R0 * 1.2), R0 * 0.55, R0 * 0.18, 3));
-        const top = V(opt.sway * H * 0.08, H * 0.45, 0);
-        const leaves = [], balls = [];
-        opt.clumps.forEach(([cx, cy, cz, R], i) => {
-          const c = V(cx * H, cy * H, cz * H), RR = R * H;
-          // Hauptast vom Stamm in den Ballen
-          const from = top.clone().add(V(0, -H * (0.04 + 0.05 * (i % 3)), 0));
-          bend(segs, from, from.clone().lerp(c, 0.5).add(V(0, -RR * 0.25, 0)), c.clone().add(V(0, -RR * 0.15, 0)), R0 * 0.5, R0 * 0.22, 5);
-          // feine Zweige im Ballen (sichtbar, wenn er sich lichtet): wachsen nach oben-außen und teilen sich zweimal
-          const twig = (p, dir, len, r, lvl) => {
-            const d = dir.clone().add(V((rnd() - 0.5) * 0.5, 0.25, (rnd() - 0.5) * 0.25)).normalize();
-            const e = p.clone().addScaledVector(d, len);
-            bend(twigs, p, p.clone().lerp(e, 0.5).add(V((rnd() - 0.5) * len * 0.2, len * 0.08, 0)), e, r, r * 0.6, 2);
-            if (lvl > 0) for (let q = 0; q < 2; q++) {
-              const nd = d.clone().applyAxisAngle(V(0, 0, 1), (q ? 1 : -1) * (0.35 + rnd() * 0.35));
-              twig(e, nd, len * (0.62 + rnd() * 0.12), r * 0.6, lvl - 1);
-            }
-          };
-          const base = c.clone().add(V(0, -RR * 0.15, 0)), outward = c.clone().sub(top).setZ(0).normalize();
-          for (let k = 0; k < 3; k++) {
-            const dir = outward.clone().applyAxisAngle(V(0, 0, 1), (k - 1) * 0.55).add(V(0, 0.6, 0)).normalize();
-            twig(base, dir, RR * 0.55, R0 * 0.2, 2);
+      bush(138, -150, 15, [[0, 0.2, 0, 0.85], [-0.75, 0, 0.1, 0.62], [0.7, -0.05, 0.15, 0.6], [0.2, 0.55, -0.1, 0.55]]);
+      bush(392, -156, 11, [[0, 0.2, 0, 0.85], [-0.7, 0, 0.1, 0.6], [0.65, 0, 0.1, 0.55]]);
+      bush(-4, 18, 22, [[0, 0.1, 0, 0.9], [0.8, -0.1, 0.1, 0.65], [0.35, 0.6, 0, 0.55]]);         // Vordergrund links, rahmt
+      // Briefkasten (rot, Spielzeug), rechts am Weg
+      { const g = new T.Group(); g.position.set(300, 0, -112); add(g);
+        const post = mesh(BOX, woodM, true, true); post.scale.set(3.5, 24, 3.5); post.position.y = 12; g.add(post);
+        const red = toon(0x5f7488);
+        const bx = mesh(BOX, red, true, true); bx.scale.set(12, 8, 18); bx.position.y = 27; g.add(bx);
+        const top = mesh(new T.CylinderGeometry(6, 6, 18, 16, 1, false, 0, Math.PI), red, true, true); top.rotation.set(Math.PI / 2, 0, Math.PI / 2); top.position.y = 31; g.add(top);
+        const flag = mesh(BOX, toon(0xe8c34a), true, false); flag.scale.set(1.2, 7, 4); flag.position.set(6.6, 33, 4); g.add(flag);
+        spots.push([300, 38, -112]); }
+      // Blumen am Hausfuß (Frühling, Sommer)
+      const flowers = new T.Group(); add(flowers);
+      const petal = [toon(0xf2a7c3), toon(0xf6e07a), toon(0xffffff), toon(0xc9a6ef)], stem = toon(0x4f7a45);
+      [[150, 0], [158, 1], [166, 2], [222, 0], [230, 3], [292, 1], [300, 2], [364, 3], [372, 0]].forEach(([x, c]) => {
+        const z = ZH + 6 + rnd() * 3, h = 6 + rnd() * 4;
+        const s = mesh(BOX, stem); s.scale.set(0.8, h, 0.8); s.position.set(x, h / 2, z); flowers.add(s);
+        ball(petal[c], x, h + 1, z, 2.4, 2.1, 2.4, flowers);
+      });
+      // Grasbüschel am vorderen Rand
+      const tuftM = toon(0x5c8a4c);
+      [[18, 40], [70, 34], [205, 44], [330, 40], [470, 36], [508, 44]].forEach(([x, z]) => {
+        for (let i = 0; i < 4; i++) { const b = add(mesh(new T.ConeGeometry(1.4, 7 + rnd() * 4, 5), tuftM)); b.position.set(x + (i - 1.5) * 2.6, 3.5, z + rnd() * 2); b.rotation.z = (i - 1.5) * 0.18; }
+      });
+
+      // ── Bäume: Cartoon-Stil. Geschwungener Stamm, Äste in verschiedenen Höhen, die weich aus dem Stamm wachsen
+      //    und sich nach oben verjüngen; Krone als zusammenhängende Wolke aus überlappenden Kugeln (gewellte Silhouette).
+      const barkM = toon(0x6e4a34), barkTwig = toon(0x7a563e);
+      const tubeMesh = (segs, sides) => {
+        const pos = [], nor = [], idx = [], up = new T.Vector3(0, 1, 0), sideV = new T.Vector3(1, 0, 0);
+        for (const [a, b, r0, r1] of segs) {
+          const d = b.clone().sub(a).normalize();
+          const u = Math.abs(d.y) > 0.9 ? sideV.clone().cross(d).normalize() : up.clone().cross(d).normalize();
+          const v = d.clone().cross(u).normalize(), base = pos.length / 3;
+          for (let ring = 0; ring < 2; ring++) {
+            const c = ring ? b : a, r = ring ? r1 : r0;
+            for (let i = 0; i < sides; i++) { const ang = i / sides * Math.PI * 2, n = u.clone().multiplyScalar(Math.cos(ang)).addScaledVector(v, Math.sin(ang)); pos.push(c.x + n.x * r, c.y + n.y * r, c.z + n.z * r); nor.push(n.x, n.y, n.z); }
           }
-          const ball = new T.Mesh(SPH, toon(0x2e6b45)); ball.scale.set(RR * 0.95, RR * 0.9, RR * 0.85); ball.position.copy(c); t.add(ball); balls.push(ball);
-          clumpLeaves(leaves, c, RR, Math.round(RR * RR * 0.42), RR * 0.3, rnd);
+          for (let i = 0; i < sides; i++) { const i2 = (i + 1) % sides; idx.push(base + i, base + sides + i, base + i2, base + i2, base + sides + i, base + sides + i2); }
+        }
+        const g = new T.BufferGeometry(); g.setAttribute("position", new T.Float32BufferAttribute(pos, 3)); g.setAttribute("normal", new T.Float32BufferAttribute(nor, 3)); g.setIndex(idx); return g;
+      };
+      const V = (a, b, c) => new T.Vector3(a, b, c);
+      // Kurve mit glatter Verjüngung; Knoten-Kugeln an jedem Segment verdecken Nähte
+      const limbC = (segs, knots, pts, r0, r1) => {
+        const crv = new T.CatmullRomCurve3(pts), n = Math.max(6, Math.round(crv.getLength() / 5));
+        let prev = crv.getPoint(0);
+        for (let i = 1; i <= n; i++) {
+          const p = crv.getPoint(i / n), ra = r0 + (r1 - r0) * Math.pow((i - 1) / n, 0.8), rb = r0 + (r1 - r0) * Math.pow(i / n, 0.8);
+          segs.push([prev, p, ra, rb]); knots.push([p, rb]); prev = p;
+        }
+        return crv;
+      };
+      const treeKit = (x, z, opt) => {
+        const t = new T.Group(); t.position.set(x, 0, z); add(t);
+        const segs = [], knots = [], twigs = [], tKnots = [];
+        const trunk = limbC(segs, knots, opt.trunk.map(([a, b, c]) => V(a, b, c)), opt.r, opt.r * 0.42);
+        opt.branches.forEach(([u, pts, rf]) => {
+          const p0 = trunk.getPoint(u);
+          const crv = limbC(segs, knots, [p0, ...pts.map(([a, b, c]) => V(a, b, c))], opt.r * rf, opt.r * rf * 0.3);
+          // Winterzweige: kurze, nach oben geschwungene Verzweigungen am Astende
+          const end = crv.getPoint(1), dir = crv.getTangent(1);
+          [[-0.5, 0.9], [0.45, 0.8], [0.05, 1.1]].forEach(([dx, dy]) => {
+            const e = end.clone().add(V(dir.x * 8 + dx * 12, dy * 13, (rnd() - 0.5) * 6));
+            limbC(twigs, tKnots, [end.clone(), end.clone().lerp(e, 0.5).add(V(dx * 3, 2, 0)), e], opt.r * rf * 0.3, opt.r * 0.06);
+          });
         });
-        t.add(new T.Mesh(tubeMesh(segs, 8), barkM));
-        t.add(new T.Mesh(tubeMesh(twigs, 5), barkLight));
-        const mesh = finishLeaves(t, leaves, rnd);
-        return { group: t, leaves: mesh, list: leaves, pts: leaves.map((L) => L.p), balls, rnd, x, z, blossom: opt.blossom, n: leaves.length };
+        // Wurzelansatz
+        [[-1, 0.3], [1, 0.2], [0, 1]].forEach(([dx, dz]) => limbC(segs, knots, [V(0, opt.r * 1.6, 0), V(dx * opt.r * 1.2, opt.r * 0.35, dz * opt.r * 0.7), V(dx * opt.r * 2.1, 0, dz * opt.r * 1.3)], opt.r * 0.55, opt.r * 0.2));
+        const wood = new T.Group(); t.add(wood);
+        wood.add(mesh(tubeMesh(segs, 10), barkM, true, true));
+        knots.forEach(([p, r]) => ball(barkM, p.x, p.y, p.z, r * 1.01, r * 1.01, r * 1.01, wood));
+        const twigG = new T.Group(); t.add(twigG);
+        twigG.add(mesh(tubeMesh(twigs, 6), barkTwig, true, false));
+        // Krone: Wolke aus Kugeln, je Kugel eigene Farbe (für Herbst-Patchwork)
+        const crown = new T.Group(); t.add(crown);
+        const blobs = opt.crown.map(([cx, cy, cz, r], i) => { const m = toon(0x5e8a4a); const b = ball(m, cx, cy, cz, r, r * 0.92, r * 0.82, crown); b.userData.r = r; b.userData.i = i; return b; });
+        return { group: t, crown, blobs, twigG, x, z, leafPts: opt.crown.map(([cx, cy, cz, r]) => V(cx, cy, cz)), blossom: opt.blossom };
       };
       const trees = [
-        cartoonTree(58, -92, 5, { h: 150, r: 6.5, sway: 0.18, clumps: [[0.02, 0.78, 0, 0.21], [-0.24, 0.62, 0.05, 0.17], [0.26, 0.64, 0.02, 0.17], [-0.12, 0.92, -0.04, 0.15], [0.17, 0.9, 0.06, 0.14], [0.36, 0.5, 0.08, 0.11], [-0.33, 0.46, 0.04, 0.11]] }),
-        cartoonTree(488, -100, 9, { h: 100, r: 4.5, sway: -0.2, blossom: true, clumps: [[-0.04, 0.78, 0, 0.22], [-0.28, 0.62, 0.05, 0.16], [0.22, 0.64, 0.02, 0.17], [0.02, 0.98, -0.02, 0.15]] }),
+        // großer Hausbaum links, vom Bildrand angeschnitten
+        treeKit(22, -104, { r: 8, trunk: [[0, -1, 0], [3, 40, 0], [-2, 82, 0], [4, 118, 0]],
+          branches: [[0.55, [[26, 92, 6], [44, 118, 4]], 0.5], [0.72, [[-20, 104, 4], [-34, 130, 0]], 0.45], [0.9, [[18, 134, -4], [26, 156, 0]], 0.4]],
+          crown: [[6, 138, 0, 40], [38, 124, 8, 30], [-28, 128, 6, 31], [18, 166, -4, 30], [-14, 164, 2, 28], [48, 150, 0, 22], [-40, 150, 0, 22], [0, 110, 18, 26], [30, 104, 16, 18], [-22, 106, 16, 18]] }),
+        // kleiner runder Baum rechts hinten, angeschnitten, im Hintergrund
+        treeKit(512, -170, { r: 5, trunk: [[0, -1, 0], [-2, 30, 0], [1, 58, 0]], blossom: true,
+          branches: [[0.6, [[-14, 62, 2], [-22, 76, 0]], 0.5], [0.8, [[12, 70, 0], [18, 84, 0]], 0.45]],
+          crown: [[-2, 82, 0, 27], [-24, 74, 6, 19], [18, 76, 4, 19], [-8, 100, 0, 18], [12, 98, 2, 16], [-2, 64, 12, 16]] }),
       ];
-      // Büsche im selben Stil (immergrün)
-      [[150, 276, 18, 10], [140, 278, 12, 7], [370, 276, 18, 10], [380, 278, 12, 7]].forEach(([cx, cy, rx, ry], i) => {
-        const z = zG(cy + ry * 0.55) + (i % 2) * 3;
-        const g = new T.Group(); g.position.set(cx, 0, z); add(g);
-        let sd = 31 + i * 7; const rnd = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
-        const R = ry / TC * 1.05, list = [];
-        [[0, 0], [-rx * 0.5, -0.15], [rx * 0.5, -0.12]].forEach(([dx, dy], k) => {
-          const r = k ? R * 0.72 : R, c = new T.Vector3(dx, r * 0.75 + dy * R, 0);
-          const b = new T.Mesh(SPH, toon(0x1f4a33)); b.scale.set(r * 0.95, r * 0.85, r * 0.8); b.position.copy(c); g.add(b);
-          clumpLeaves(list, c, r, Math.round(r * r * 0.9), r * 0.36, rnd);
-        });
-        const mesh = finishLeaves(g, list, rnd);
-        list.forEach((L, k) => { const c = new T.Color(0x3f7a40); c.offsetHSL(0.03 * (0.5 - L.lit), 0, (L.lit - 0.55) * 0.3); mesh.setColorAt(k, c); });
-        mesh.instanceColor.needsUpdate = true;
-        if (i % 2 === 0) spots.push([cx, R * 1.6, z]);
+      // Tanne vorn rechts: gestapelte, weich gerundete Nadel-Etagen mit gewelltem Rand
+      const fir = new T.Group(); fir.position.set(462, 0, -52); add(fir);
+      { const s = mesh(new T.CylinderGeometry(3, 3.6, 12, 10), barkM, true, true); s.position.y = 6; fir.add(s); }
+      const needleA = toon(0x2f5a44), needleB = toon(0x376650);
+      const tiers = [[30, 30, 9], [25, 27, 30], [20, 24, 49], [14.5, 21, 66], [9, 17, 80]];
+      tiers.forEach(([r, h, y], i) => {
+        const m = i % 2 ? needleB : needleA;
+        const c = mesh(new T.ConeGeometry(r, h, 18), m, true, true); c.position.y = y + h / 2; fir.add(c);
+        for (let k = 0; k < 12; k++) { const a = k / 12 * Math.PI * 2; if (Math.sin(a) < -0.4) continue; ball(m, Math.cos(a) * r * 0.9, y + 2.2, Math.sin(a) * r * 0.9, r * 0.2, r * 0.13, r * 0.2, fir); }
       });
-      // Jahreszeiten: Blattdichte, Farben (hell → dunkel wird je Blatt aus seiner Lage abgeleitet),
-      // Grundfarbe der Ballen, fallende Blätter pro Sekunde, Blätter am Boden zu Beginn
+      const firR = (y) => { for (const [r, h, y0] of tiers) if (y >= y0 && y <= y0 + h) return r * (1 - (y - y0) / h); return 0; };
+      spots.push([462 + firR(40) * 0.5, 44, -52 + firR(40) * 0.6]);
+      // Weihnachtsschmuck (1.12.–6.1.)
+      const deco = new T.Group(); fir.add(deco);
+      const LIGHT_COLS = [0xffd27a, 0xfff1c2, 0xffb36b, 0xffe39a], lights = [];
+      for (let i = 0; i < 46; i++) {
+        const u = i / 46, y = 13 + u * 74, a = u * Math.PI * 2 * 5.2 + 0.4, r = firR(y) * 0.95 + 0.8;
+        const m = new T.MeshBasicMaterial({ color: LIGHT_COLS[i % 4] });
+        const b = mesh(SPH, m); b.scale.setScalar(1.3); b.position.set(Math.cos(a) * r, y, Math.sin(a) * r); deco.add(b);
+        const g = mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), color: LIGHT_COLS[i % 4], transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending }));
+        g.scale.setScalar(11); g.position.copy(b.position); g.position.z += 0.8; deco.add(g);
+        lights.push({ m, g, ph: i * 2.39, base: new T.Color(LIGHT_COLS[i % 4]) });
+      }
+      [[16, 0.3], [24, 2.1], [31, 0.9], [38, 2.7], [46, 1.5], [54, 0.2], [61, 2.4], [70, 1.1], [27, -0.6], [50, -0.9]].forEach(([y, a], i) => {
+        const r = firR(y) * 0.95 + 1.2; ball(toon([0xc23b33, 0xe2b23e, 0xb8322c, 0xd9a733][i % 4]), Math.cos(a) * r, y - 1.5, Math.sin(a) * r, 2.4, 2.4, 2.4, deco);
+      });
+      const star = new T.Shape();
+      for (let i = 0; i < 10; i++) { const r = i % 2 ? 2.8 : 6.5, a = Math.PI / 2 + i * Math.PI / 5; i ? star.lineTo(Math.cos(a) * r, Math.sin(a) * r) : star.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
+      const starM = mesh(new T.ExtrudeGeometry(star, { depth: 1.4, bevelEnabled: false }), new T.MeshBasicMaterial({ color: 0xffd84a })); starM.position.set(0, 102, -0.7); deco.add(starM);
+      const starGlow = mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), color: 0xffe08a, transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending }));
+      starGlow.scale.setScalar(28); starGlow.position.set(0, 102, 1); deco.add(starGlow);
+
+      // ── Jahreszeiten ──
+      const LEAF_GEO = (() => { const s = new T.Shape(); s.moveTo(0, -1); s.bezierCurveTo(0.95, -0.85, 0.95, 0.45, 0, 1); s.bezierCurveTo(-0.95, 0.45, -0.95, -0.85, 0, -1); return new T.ShapeGeometry(s, 6); })();
+      const leafMat = new T.MeshToonMaterial({ color: 0xffffff, gradientMap: grad, side: T.DoubleSide });
+      // Kronenfarben (je Kugel eine), Anteil sichtbarer Kugeln, Laubfall pro Sekunde, Laub am Boden
       const SEASON = {
-        fruehling:   { dens: 0.85, cols: [0x8cc45a, 0x9ccf68, 0x7db552], ball: 0x467f3e, bloom: [0xf9d3e0, 0xffffff, 0xf5bfd2], fall: 0, ground: 0 },
-        sommer:      { dens: 1, cols: [0x5f9e48, 0x4f8f45, 0x6fac52, 0x478640], ball: 0x24563a, fall: 0.03, ground: 0 },
-        herbst:      { dens: 0.95, cols: [0x7f9c3a, 0xc9a52e, 0xd98c2e, 0xcf6c2c, 0xbb4e2a, 0xa63c2a], ball: 0x6e3e22, fall: 0.5, ground: 70 },
-        spaetherbst: { dens: 0.3, cols: [0xd18a2e, 0xbf6229, 0xa8452a, 0xc9a23e], ball: null, fall: 1.3, ground: 190 },
-        winter:      { dens: 0, cols: [0x9a6a34], ball: null, fall: 0, ground: 0 },
+        fruehling:   { cols: [0x74a453, 0x80ae5a, 0x6b9b4e], keep: 0.9, bloom: true, flowers: true, fall: 0, ground: 0 },
+        sommer:      { cols: [0x4e7a42, 0x47723f, 0x557f47], keep: 1, flowers: true, fall: 0.02, ground: 0 },
+        herbst:      { cols: [0x8a9a42, 0xc9a23a, 0xd38a34, 0xc86a30, 0xb35233, 0x6f8a44], keep: 1, fall: 0.35, ground: 40 },
+        spaetherbst: { cols: [0xcf8a34, 0xbb5f2e, 0xa84a30, 0xc8a044], keep: 0.4, fall: 0.9, ground: 140 },
+        winter:      { cols: [0x8a6a3a], keep: 0, fall: 0, ground: 0 },
       };
       let seasonNow = null;
-      const applySeason = (name) => {
-        const P = SEASON[name] || SEASON.sommer;
-        trees.forEach((tr) => {
-          const c = new T.Color();
-          tr.list.forEach((L, i) => {
-            if (tr.blossom && P.bloom && tr.rnd() < 0.3) c.setHex(P.bloom[Math.floor(tr.rnd() * P.bloom.length)]).offsetHSL(0, 0, (L.lit - 0.6) * 0.15);
-            // dunkle Blätter leicht ins Bläuliche, helle ins Gelbe
-            else c.setHex(P.cols[Math.floor(tr.rnd() * P.cols.length)]).offsetHSL(0.035 * (0.5 - L.lit), 0, (L.lit - 0.55) * 0.32);
-            tr.leaves.setColorAt(i, c);
-          });
-          tr.leaves.instanceColor.needsUpdate = true;
-          tr.leaves.count = Math.round(tr.n * P.dens);
-          tr.balls.forEach((b) => { b.visible = P.ball !== null && P.dens >= 0.6; if (P.ball !== null) b.material.color.setHex(P.ball); });
-        });
-        // Laub am Boden: meist unter den Bäumen, einzeln auf der Wiese
-        groundN = 0;
-        for (let i = 0; i < P.ground; i++) {
-          const tr = trees[i % 3 === 2 ? 1 : 0], under = tr.rnd() < 0.75;
-          const gx = under ? tr.x + (tr.rnd() - 0.5) * 110 : 20 + tr.rnd() * 480;
-          const gz = under ? tr.z + (tr.rnd() - 0.3) * 90 : -130 + tr.rnd() * 140;
-          placeGround(gx, gz, P.cols[Math.floor(tr.rnd() * P.cols.length)]);
-        }
-        groundLeaves.visible = name !== "winter" && P.ground > 0;
-        fallers.forEach((f) => { f.on = false; }); fallMesh.count = 0;
-      };
-      // Laub am Boden (Ringpuffer) und fallende Blätter
-      const GROUND_MAX = 260;
-      const groundLeaves = new T.InstancedMesh(LEAF_GEO, leafMat, GROUND_MAX); groundLeaves.count = 0; add(groundLeaves);
+      const GROUND_MAX = 200;
+      const groundLeaves = new T.InstancedMesh(LEAF_GEO, leafMat, GROUND_MAX); groundLeaves.count = 0; groundLeaves.receiveShadow = true; add(groundLeaves);
       groundLeaves.setColorAt(0, new T.Color()); let groundN = 0;
       const go = new T.Object3D(), gc = new T.Color();
       const placeGround = (gx, gz, hex) => {
         const i = groundN % GROUND_MAX; groundN++;
-        go.position.set(gx, 0.35 + (i % 7) * 0.02, gz); go.rotation.set(-Math.PI / 2 + (Math.random() - 0.5) * 0.3, 0, Math.random() * 6.28);
-        go.scale.setScalar(2.2 + Math.random() * 0.9); go.updateMatrix(); groundLeaves.setMatrixAt(i, go.matrix);
-        groundLeaves.setColorAt(i, gc.setHex(hex).offsetHSL(0, -0.08, -0.06));
-        groundLeaves.count = Math.min(GROUND_MAX, groundN);
-        groundLeaves.instanceMatrix.needsUpdate = true; groundLeaves.instanceColor.needsUpdate = true;
+        go.position.set(gx, 0.4 + (i % 7) * 0.02, gz); go.rotation.set(-Math.PI / 2 + (Math.random() - 0.5) * 0.3, 0, Math.random() * 6.28);
+        go.scale.setScalar(3 + Math.random()); go.updateMatrix(); groundLeaves.setMatrixAt(i, go.matrix);
+        groundLeaves.setColorAt(i, gc.setHex(hex).offsetHSL(0, -0.06, -0.05));
+        groundLeaves.count = Math.min(GROUND_MAX, groundN); groundLeaves.instanceMatrix.needsUpdate = true; groundLeaves.instanceColor.needsUpdate = true;
       };
-      const FALL_MAX = 40;
-      const fallMesh = new T.InstancedMesh(LEAF_GEO, leafMat, FALL_MAX); fallMesh.count = 0; add(fallMesh);
-      fallMesh.setColorAt(0, new T.Color());
-      const fallers = Array.from({ length: FALL_MAX }, () => ({ on: false, p: new T.Vector3(), vy: 0, ph: 0, sp: 0, col: 0 }));
+      const FALL_MAX = 24;
+      const fallMesh = new T.InstancedMesh(LEAF_GEO, leafMat, FALL_MAX); fallMesh.count = 0; add(fallMesh); fallMesh.setColorAt(0, new T.Color());
+      const fallers = Array.from({ length: FALL_MAX }, () => ({ on: false, p: new T.Vector3() }));
       let fallAcc = 0;
+      const applySeason = (name) => {
+        const P = SEASON[name] || SEASON.sommer;
+        trees.forEach((tr, ti) => {
+          tr.blobs.forEach((b, i) => {
+            const show = P.keep >= 1 || (P.keep > 0 && ((i * 7 + ti * 3) % 10) / 10 < P.keep);
+            b.visible = show; b.scale.setScalar(1); b.scale.set(b.userData.r, b.userData.r * 0.92, b.userData.r * 0.82);
+            if (P.keep < 1 && show) b.scale.multiplyScalar(0.8);
+            b.material.color.setHex(P.cols[(i * 5 + ti) % P.cols.length]);
+            if (P.bloom && tr.blossom) b.material.color.lerp(new T.Color(0xf3c9d8), i % 2 ? 0.55 : 0.25);
+          });
+          tr.twigG.visible = P.keep < 1;
+        });
+        flowers.visible = !!P.flowers;
+        groundN = 0; groundLeaves.count = 0;
+        for (let i = 0; i < P.ground; i++) {
+          const tr = trees[i % 4 === 3 ? 1 : 0], under = Math.random() < 0.8;
+          placeGround(under ? tr.x + (Math.random() - 0.4) * 120 : 20 + Math.random() * 480, under ? tr.z + (Math.random() - 0.2) * 110 : -150 + Math.random() * 170, P.cols[Math.floor(Math.random() * P.cols.length)]);
+        }
+        fallers.forEach((f) => { f.on = false; }); fallMesh.count = 0;
+      };
       const tickLeaves = (name, t, dt) => {
         const P = SEASON[name] || SEASON.sommer;
         fallAcc += dt * P.fall;
         while (fallAcc > 1) {
           fallAcc -= 1;
-          const f = fallers.find((q) => !q.on); if (!f) break;
-          const tr = trees[Math.random() < 0.65 ? 0 : 1];
-          if (!tr.leaves.count) break;
-          const lp = tr.pts[Math.floor(Math.random() * tr.leaves.count)];
-          f.on = true; f.p.set(tr.x + lp.x, lp.y, tr.z + lp.z); f.vy = 7 + Math.random() * 5; f.ph = Math.random() * 6.28; f.sp = 1.5 + Math.random() * 2;
-          f.col = P.cols[Math.floor(Math.random() * P.cols.length)]; f.drift = 2 + Math.random() * 4;
+          const f = fallers.find((q) => !q.on), tr = trees[Math.random() < 0.7 ? 0 : 1];
+          const vis = tr.blobs.filter((b) => b.visible); if (!f || !vis.length) break;
+          const b = vis[Math.floor(Math.random() * vis.length)];
+          f.on = true; f.p.set(tr.x + b.position.x + (Math.random() - 0.5) * b.userData.r, b.position.y - b.userData.r * 0.6, tr.z + b.position.z + b.userData.r * 0.5);
+          f.vy = 6 + Math.random() * 4; f.ph = Math.random() * 6.28; f.sp = 1.4 + Math.random() * 1.6; f.drift = 2 + Math.random() * 4;
+          f.col = P.cols[Math.floor(Math.random() * P.cols.length)];
         }
         let n = 0;
         for (const f of fallers) {
           if (!f.on) continue;
           f.p.y -= f.vy * dt; f.p.x += (Math.sin(t * f.sp + f.ph) * 9 + f.drift) * dt; f.p.z += Math.cos(t * f.sp * 0.7 + f.ph) * 3 * dt;
-          if (f.p.y <= 0.5) { f.on = false; placeGround(f.p.x, f.p.z, f.col); continue; }
+          if (f.p.y <= 0.6) { f.on = false; placeGround(f.p.x, f.p.z, f.col); continue; }
           go.position.copy(f.p); go.rotation.set(Math.sin(t * f.sp + f.ph) * 1.1, t * f.sp * 0.8 + f.ph, Math.cos(t * f.sp * 1.3 + f.ph) * 0.9);
-          go.scale.setScalar(2.5); go.updateMatrix(); fallMesh.setMatrixAt(n, go.matrix); fallMesh.setColorAt(n, gc.setHex(f.col)); n++;
+          go.scale.setScalar(3.4); go.updateMatrix(); fallMesh.setMatrixAt(n, go.matrix); fallMesh.setColorAt(n, gc.setHex(f.col)); n++;
         }
         fallMesh.count = n;
         if (n) { fallMesh.instanceMatrix.needsUpdate = true; fallMesh.instanceColor.needsUpdate = true; }
-        // sanftes Wiegen im Wind
-        trees.forEach((tr, i) => { tr.group.rotation.z = Math.sin(t * 0.55 + i * 2) * 0.006 + Math.sin(t * 1.3 + i) * 0.002; });
+        trees.forEach((tr, i) => { tr.crown.rotation.z = Math.sin(t * 0.5 + i * 2) * 0.008; tr.crown.position.x = Math.sin(t * 0.5 + i * 2) * 0.6; });
       };
-      // Kaminrauch: weiche Wölkchen, steigen, wachsen, verblassen, treiben mit dem Wind
-      const smokeMat = () => new T.MeshBasicMaterial({ map: glowTex(), color: 0xb8c0cc, transparent: true, opacity: 0, depthWrite: false });
-      const puffs3 = Array.from({ length: 16 }, () => { const m = new T.Mesh(PL, smokeMat()); m.visible = false; add(m); return { m, age: 99, life: 6 }; });
+      // Kaminrauch
+      const puffs3 = Array.from({ length: 16 }, () => { const m = mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), color: 0xb8c0cc, transparent: true, opacity: 0, depthWrite: false })); m.visible = false; add(m); return { m, age: 99, life: 6 }; });
       let smokeAcc = 0;
       const tickSmoke = (S, t, dt) => {
         const amt = S.smoke || 0;
         smokeAcc += dt * amt * 1.4;
-        if (smokeAcc > 1) {
-          smokeAcc = 0;
-          const p = puffs3.find((q) => q.age >= q.life);
-          if (p) { p.age = 0; p.life = 5 + Math.random() * 2.5; p.x0 = 345 + (Math.random() - 0.5) * 6; p.m.position.set(p.x0, 204, chimZ - 10); p.ph = Math.random() * 6; }
-        }
+        if (smokeAcc > 1) { smokeAcc = 0; const p = puffs3.find((q) => q.age >= q.life); if (p) { p.age = 0; p.life = 5 + Math.random() * 2.5; p.x0 = 342 + (Math.random() - 0.5) * 6; p.m.position.set(p.x0, 204, chimZ); p.ph = Math.random() * 6; } }
         const night = S.isDay ? 0 : 1;
         for (const p of puffs3) {
           if (p.age >= p.life) { p.m.visible = false; continue; }
-          p.age += dt; const u = p.age / p.life;
-          p.m.visible = true;
+          p.age += dt; const u = p.age / p.life; p.m.visible = true;
           p.m.position.y = 204 + p.age * 8; p.m.position.x = p.x0 + p.age * p.age * 0.6 + Math.sin(p.age * 0.9 + p.ph) * 2.5;
-          p.m.scale.setScalar(5 + u * 18);
-          p.m.material.color.setHex(night ? 0x6e7890 : 0xb8c0cc);
-          p.m.material.opacity = (night ? 0.22 : 0.3) * Math.min(1, u * 5) * (1 - u) * Math.max(0.5, amt);
+          p.m.scale.setScalar(6 + u * 18);
+          p.m.material.color.setHex(night ? 0x6e7890 : 0xc8ced8);
+          p.m.material.opacity = (night ? 0.22 : 0.32) * Math.min(1, u * 5) * (1 - u) * Math.max(0.5, amt);
         }
       };
-      // Tanne vorn rechts, mit Weihnachtsschmuck (nur im Winter)
-      const fir = new T.Group(); fir.position.set(452, 0, -32); add(fir);
-      limb(fir, 0, 0, 0, 10, 0, 0, 2.6, 2.2, bark);
-      const needleA = toon(0x2c5838), needleB = toon(0x376a43);
-      const tiers = [[25, 28, 8], [21, 25, 26], [16.5, 22, 42], [11.5, 19, 56], [6.5, 15, 68]];
-      tiers.forEach(([r, h, y], i) => { const c = new T.Mesh(new T.ConeGeometry(r, h, 10), i % 2 ? needleB : needleA); c.position.y = y + h / 2; fir.add(c); });
-      const firR = (y) => { for (const [r, h, y0] of tiers) if (y >= y0 && y <= y0 + h) return r * (1 - (y - y0) / h); return 0; };
-      const deco = new T.Group(); fir.add(deco);
-      const LIGHT_COLS = [0xffd27a, 0xfff1c2, 0xffb36b, 0xffe39a];
-      const lights = [];
-      for (let i = 0; i < 44; i++) {
-        const u = i / 44, y = 12 + u * 64, a = u * Math.PI * 2 * 5.2 + 0.4, r = firR(y) * 0.92 + 0.6;
-        const m = new T.MeshBasicMaterial({ color: LIGHT_COLS[i % 4] });
-        const b = new T.Mesh(SPH, m); b.scale.setScalar(1.25); b.position.set(Math.cos(a) * r, y, Math.sin(a) * r); deco.add(b);
-        const g = new T.Mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), color: LIGHT_COLS[i % 4], transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending }));
-        g.scale.setScalar(11); g.position.copy(b.position); g.position.z += 0.8; deco.add(g);
-        lights.push({ m, g, ph: i * 2.39, base: new T.Color(LIGHT_COLS[i % 4]) });
-      }
-      const ballCols = [toon(0xc23b33), toon(0xe2b23e), toon(0xb8322c), toon(0xd9a733)];
-      [[14, 0.3], [20, 2.1], [27, 0.9], [33, 2.7], [40, 1.5], [47, 0.2], [53, 2.4], [60, 1.1], [22, -0.6], [44, -0.9]].forEach(([y, a], i) => {
-        const r = firR(y) * 0.95 + 1;
-        const b = new T.Mesh(SPH, ballCols[i % 4]); b.scale.setScalar(2.1); b.position.set(Math.cos(a) * r, y - 1.5, Math.sin(a) * r); deco.add(b);
-      });
-      const star = new T.Shape();
-      for (let i = 0; i < 10; i++) { const r = i % 2 ? 2.6 : 6, a = Math.PI / 2 + i * Math.PI / 5; i ? star.lineTo(Math.cos(a) * r, Math.sin(a) * r) : star.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
-      const starM = new T.Mesh(new T.ExtrudeGeometry(star, { depth: 1.2, bevelEnabled: false }), new T.MeshBasicMaterial({ color: 0xffd84a }));
-      starM.position.set(0, 89, -0.6); deco.add(starM);
-      const starGlow = new T.Mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), color: 0xffe08a, transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending }));
-      starGlow.scale.setScalar(26); starGlow.position.set(0, 89, 1); deco.add(starGlow);
-      spots.push([452 + firR(40) * 0.6, 42, -32 + firR(40) * 0.6]);
 
-      // ── Aktualisieren ──
+      // ── Stimmung je Tageszeit: Licht und Dunst ──
+      const MOOD = {
+        Nachts:      { hs: 0x2a3656, hg: 0x0a0e16, hi: 0.42, sc: 0x9fb4ff, si: 0.22, far: 0x141d30, near: 0x101827, tree: 0x0f1622 },
+        Morgens:     { hs: 0x7a6286, hg: 0x221c1e, hi: 0.52, sc: 0xffb27a, si: 0.52, far: 0x5a4a6a, near: 0x40384e, tree: 0x3a3248 },
+        Vormittags:  { hs: 0xc2d6f0, hg: 0x4a5a3a, hi: 0.7, sc: 0xfff0d6, si: 0.72, far: 0x8aa8c4, near: 0x6f94a6, tree: 0x6a8ca0 },
+        Mittags:     { hs: 0xd0e2f6, hg: 0x506040, hi: 0.74, sc: 0xfff8ea, si: 0.76, far: 0x96b6d0, near: 0x7aa0b0, tree: 0x739aab },
+        Nachmittags: { hs: 0xbccaea, hg: 0x4a5038, hi: 0.7, sc: 0xffe0b0, si: 0.72, far: 0x88a2c0, near: 0x6c8ca2, tree: 0x66869c },
+        Abends:      { hs: 0x5e4870, hg: 0x1a1416, hi: 0.46, sc: 0xff9a5a, si: 0.42, far: 0x4a3450, near: 0x382a40, tree: 0x302438 },
+      };
       const col = new T.Color();
       let tPrev = null;
       const update = (S, t, dt) => {
         if (!S) return;
-        const k = 1 - Math.exp(-dt / 0.45);
-        for (const tn of tints) {
-          const c = S.colors[tn.key]; if (c === undefined) continue;
-          col.setStyle(c);
-          tn.m.color.lerp(col, tPrev === null ? 1 : k);
-        }
+        const first = tPrev === null, k = first ? 1 : 1 - Math.exp(-dt / 0.45);
+        for (const tn of tints) { const c = S.colors[tn.key]; if (c === undefined) continue; col.setStyle(c); tn.m.color.lerp(col, k); }
         tPrev = t;
+        const M = MOOD[S.slotName] || MOOD.Vormittags;
+        hemi.color.lerp(col.setHex(M.hs), k); hemi.groundColor.lerp(col.setHex(M.hg), k); hemi.intensity += (M.hi - hemi.intensity) * k;
+        sun.color.lerp(col.setHex(M.sc), k); sun.intensity += (M.si - sun.intensity) * k;
+        hillFar.color.lerp(col.setHex(M.far), k); hillNear.color.lerp(col.setHex(M.near), k); hillTree.color.lerp(col.setHex(M.tree), k);
+        // Sonne/Mond: Richtung nach Sonnenstand (SVG-Bogen), nachts Mond oben rechts
+        const a = (S.sunAngle === undefined ? 55 : S.sunAngle) * Math.PI / 180, night = S.slotName === "Nachts";
+        const dir = night ? V(0.55, 0.9, 0.75) : V(-Math.cos(a), Math.max(0.35, Math.sin(a)) * 1.1, 0.8);
+        sun.userData.dir = sun.userData.dir ? sun.userData.dir.lerp(dir, k) : dir;
+        sun.position.copy(sun.target.position).addScaledVector(sun.userData.dir.clone().normalize(), 600);
         ["k", "s"].forEach((key) => {
           const on = S[key + "On"], w = W[key];
-          w.mats.forEach((m) => { const target = on ? m.userData.onOp : 1; m.opacity += (target - m.opacity) * (tPrev === null ? 1 : k); });
+          w.mats.forEach((m) => { m.opacity += ((on ? m.userData.onOp : 1) - m.opacity) * k; });
           const base = S.isDay ? (key === "k" ? 0.08 : 0.06) : (key === "k" ? 0.15 : 0.12);
           const pulse = key === "k" ? 0.6 + 0.4 * Math.sin(t * 1.26) : 0.6 + 0.25 * Math.sin(t * 2.1) + 0.15 * Math.sin(t * 5.3);
           w.glow.material.color.setStyle(key === "k" ? C.kitchen.on : C.tv.on);
-          w.glow.material.opacity += ((on ? base * 2.4 * pulse : 0) - w.glow.material.opacity) * k;
-          w.reflex.material.opacity = S.isDay && !on ? 0.06 : 0;
-          pools[key].material.opacity += ((on && !S.isDay ? (key === "k" ? 0.08 : 0.06) : 0) - pools[key].material.opacity) * k;
+          w.glow.material.opacity += ((on ? base * 1.5 * pulse : 0) - w.glow.material.opacity) * k;
+          WL[key].intensity += ((on && !S.isDay ? (key === "k" ? 0.75 : 0.55) * (0.85 + 0.15 * pulse) : 0) - WL[key].intensity) * k;
         });
-        pools.e.material.opacity += ((S.eOn && !S.isDay ? 0.1 : 0) - pools.e.material.opacity) * k;
+        WL.e.intensity += ((S.eOn && !S.isDay ? 0.45 : 0) - WL.e.intensity) * k;
         doorLight.material.opacity = S.eOn ? 0.3 : 0;
-        knob.position.x += ((S.eOn ? 251 : 269) - knob.position.x) * (knob.userData.init ? k * 1.5 : 1); knob.userData.init = true;
-        knob.position.y = yAt(252, dz + 0.4);
-        // Jahreszeit: im Winter kahle Laubbäume, Tanne geschmückt
+        knob.position.x += ((S.eOn ? 250 : 270) - knob.position.x) * (knob.userData.init ? k * 1.5 : 1); knob.userData.init = true;
+        knob.position.y = yAt(250, dz + 1.2);
         if (S.season !== seasonNow) { seasonNow = S.season; applySeason(S.season); }
         tickLeaves(S.season, t, dt);
         tickSmoke(S, t, dt);
         deco.visible = S.season === "winter" && S.xmas;
         if (deco.visible) {
-          const night = S.isDay ? 0.3 : 1;
-          lights.forEach((L) => {
-            const tw = 0.55 + 0.45 * Math.max(0, Math.sin(t * (0.9 + (L.ph % 1)) + L.ph)) ;
-            L.m.color.copy(L.base).multiplyScalar(0.55 + 0.45 * tw);
-            L.g.material.opacity = Math.min(1, 0.95 * tw * night);
-          });
+          const nf = S.isDay ? 0.3 : 1;
+          lights.forEach((L) => { const tw = 0.55 + 0.45 * Math.max(0, Math.sin(t * (0.9 + (L.ph % 1)) + L.ph)); L.m.color.copy(L.base).multiplyScalar(0.55 + 0.45 * tw); L.g.material.opacity = Math.min(1, 0.95 * tw * nf); });
           starGlow.material.opacity = (0.35 + 0.1 * Math.sin(t * 1.7)) * (S.isDay ? 0.4 : 1);
         }
       };
-      return { update, spots };
+      return { update, spots, ownsLights: true };
     }
 
     let _glowTex = null;
@@ -1088,7 +1041,12 @@
           scene.add(amb, dir);
           const J = buildDeer3D(T);
           scene.add(J.root, J.bf);
-          const S3 = live.current.scene ? buildScene3D(T, scene) : null;
+          const S3 = live.current.scene ? buildScene3D(T, scene, renderer) : null;
+          if (S3) {
+            // Szene bringt eigenes Licht und Schatten mit: Reh wirft echten Schatten, Klecks-Schatten nur noch zart
+            J.root.traverse((c) => { if (c.isMesh && c !== J.shadow) c.castShadow = true; });
+            J.shadow.material.opacity = 0.12;
+          }
           // Schatten des Schmetterlings am Boden: Tiefen- und Höhenhinweis
           const bfShadow = new T.Mesh(new T.CircleGeometry(1, 20), new T.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthWrite: false }));
           bfShadow.rotation.x = -Math.PI / 2; bfShadow.position.y = 0.45; scene.add(bfShadow);
@@ -1544,7 +1502,7 @@
               J[k].rotation.z = -rad(h);
               J[k + "k"].rotation.z = -rad(kn);
             }
-            J.shadow.material.opacity = 0.26 - c3(c.bodyY / 10, 0, 1) * 0.06;
+            J.shadow.material.opacity = (S3 ? 0.12 : 0.26) - c3(c.bodyY / 10, 0, 1) * 0.06;
 
             if (st.bf) {
               J.bf.visible = true;
@@ -1578,7 +1536,7 @@
 
             if (S3) S3.update(Lv.scene, t, dt);
             // Licht nach Tageszeit
-            amb.intensity = 0.62 * Lv.light; dir.intensity = 0.55 * Lv.light;
+            if (S3) { amb.intensity = 0; dir.intensity = 0; } else { amb.intensity = 0.62 * Lv.light; dir.intensity = 0.55 * Lv.light; }
 
             // Zzz (SVG) über dem Kopf platzieren
             if (zzzRef && zzzRef.current) {
@@ -1945,7 +1903,7 @@
       const sh = (b, f, add) => "rgb(" + b.map((v) => Math.max(0, Math.min(255, Math.round(v * f + (add || 0))))).join(", ") + ")";
       const cold = slot.w && typeof slot.w.t === "number" ? slot.w.t < 10 : ["herbst", "spaetherbst", "winter"].includes(season);
       const sceneState = s3 ? {
-        isDay, kOn, sOn, eOn, winter: !!winter, season: season || "sommer", xmas: !!xmas,
+        isDay, kOn, sOn, eOn, winter: !!winter, season: season || "sommer", xmas: !!xmas, slotName, sunAngle: sky.sunAngle,
         // Kaminrauch: wenn in der Küche etwas los ist, sonst morgens/abends/nachts bei Kälte
         smoke: kOn ? 1 : cold && ["Morgens", "Abends", "Nachts"].includes(slotName) ? 0.7 : 0,
         colors: {
@@ -1984,8 +1942,19 @@
 
           <g clipPath="url(#sceneClip)">
             {/* SKY */}
+            {s3 ? (
+              // 3D-Szene: weicher Verlauf ohne hartes Band (Hügel und Dunst kommen aus dem Canvas)
+              <React.Fragment>
+                <linearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={sky.top} style={{ transition: T("1.2s") }} />
+                  <stop offset="85%" stopColor={sky.bot} style={{ transition: T("1.2s") }} />
+                </linearGradient>
+                <rect width="520" height="320" fill="url(#skyGrad)" />
+              </React.Fragment>
+            ) : (<React.Fragment>
             <rect width="520" height="320" fill={sky.bot} style={{ transition: T("1.2s") }} />
             <rect width="520" height="200" fill={sky.top} opacity="0.8" style={{ transition: T("1.2s") }} />
+            </React.Fragment>)}
             <ellipse cx="260" cy="290" rx="300" ry="80" fill={sky.horizonColor} opacity={sky.horizonOp} style={{ transition: T("1s") }} />
 
             {/* STARS */}
