@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.12.0
+  Version: 1.13.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.12.0";
+    const FRONTEND_VERSION = "1.13.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -610,7 +610,7 @@
           const resize = () => {
             const w = canvas.clientWidth, h = canvas.clientHeight;
             if (!w || !h) return;
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 3));
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));   // 2 reicht, schont Akku und ältere Geräte
             renderer.setSize(w, h, false);
           };
           resize();
@@ -1821,18 +1821,19 @@
     }
 
     // ─── MAIN DASHBOARD ──────────────────────────────────────────────────
-    // Reh v2 (Vorschau): nur im Karsten-Modus mit ?deer=v2, bleibt per localStorage aktiv.
-    // ?deer=v1 schaltet zurück.
-    function useDeerV2(showBird) {
-      const [on] = useState(() => {
+    // 3D-Reh mit Schmetterling: für alle (ohne WebGL automatisch das klassische SVG-Reh).
+    // ?deer=v1 → klassisches Reh auf diesem Gerät, ?deer=v2 → 3D plus Test-Leiste (nur Karsten-Modus),
+    // ?deer=auto → zurück zum Standard. Wahl bleibt per localStorage.
+    function useDeerMode(showBird) {
+      const [mode] = useState(() => {
         try {
           const q = new URLSearchParams(window.location.search).get("deer");
-          if (q === "v2") localStorage.setItem("wetter_deer", "v2");
-          if (q === "v1") localStorage.removeItem("wetter_deer");
-          return localStorage.getItem("wetter_deer") === "v2";
-        } catch (e) { return false; }
+          if (q === "v1" || q === "v2") localStorage.setItem("wetter_deer", q);
+          if (q === "auto") localStorage.removeItem("wetter_deer");
+          return localStorage.getItem("wetter_deer") || "auto";
+        } catch (e) { return "auto"; }
       });
-      return on && showBird;
+      return { use3d: mode !== "v1", panel: showBird && mode === "v2" };
     }
 
     // 3-Monats-Archiv (Vorschau): nur im Karsten-Modus mit ?archiv=1, bleibt per localStorage aktiv.
@@ -1844,6 +1845,17 @@
         if (q === "0") localStorage.removeItem("wetter_archiv");
         return localStorage.getItem("wetter_archiv") === "1" && localStorage.getItem("wetter_mode") === "karsten";
       } catch (e) { return false; }
+    }
+
+    // Archiv = aktueller Monat + drei volle Vormonate (bis zu 123 Tage)
+    const ARCHIVE_MONTHS = 4;
+    function archiveStart(now) {
+      const d = now || new Date();
+      return new Date(d.getFullYear(), d.getMonth() - (ARCHIVE_MONTHS - 1), 1);
+    }
+    function archiveDays() {
+      const now = new Date(), start = archiveStart(now);
+      return Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - start) / 864e5) + 1;
     }
 
     // Wetter eines Zeitfensters (Feld w der JSON-API, seit Backend 4.7.0)
@@ -1867,7 +1879,7 @@
     const dayActivity = (d) => d.slots.filter(s => isOn(s.k) || isOn(s.s) || isOn(s.e)).length / 6;
 
     function DashboardMain({ history: allHistory, lastPoll, backendVersion, showBird, onToggleBird }) {
-      const deerV2 = useDeerV2(showBird);
+      const deer = useDeerMode(showBird);
       const [week, setWeek] = useState(0);
       const [selDay, setSelDay] = useState(0);
       const [selSlot, setSelSlot] = useState(getNowSlot());
@@ -2017,9 +2029,10 @@
                   const cell = mob ? 19 : 20, gap = 3;
                   const idxOf = {}; allHistory.forEach((d, i) => { idxOf[d.date] = i; });
                   const selIdx = wk * 7 + selDay;
-                  const months = [];
-                  allHistory.forEach((d) => { const m = d.date.slice(0, 7); if (months.indexOf(m) < 0) months.push(m); });
                   const pad = (n) => (n < 10 ? "0" : "") + n;
+                  // Immer ganze Monate: aktueller + drei Vormonate (auch wenn Daten am Anfang fehlen)
+                  const now0 = new Date(), months = [];
+                  for (let k = 0; k < ARCHIVE_MONTHS; k++) { const md = new Date(now0.getFullYear(), now0.getMonth() - k, 1); months.push(md.getFullYear() + "-" + pad(md.getMonth() + 1)); }
                   const monthBlock = (ym) => {
                     const y = +ym.slice(0, 4), m = +ym.slice(5, 7);
                     const first = new Date(y, m - 1, 1), nDays = new Date(y, m, 0).getDate();
@@ -2060,7 +2073,7 @@
                   return (
                     <div style={{ marginTop: mob ? 18 : 24, textAlign: "center" }}>
                       <div style={{ fontSize: mob ? 11 : 12, color: C.textFaint, textTransform: "uppercase", letterSpacing: 2, marginBottom: 12 }}>
-                        Letzte {Math.round(allHistory.length / 30)} Monate
+                        Monatsübersicht
                       </div>
                       <div style={{ display: "inline-grid", gridTemplateColumns: "repeat(2, auto)", gap: mob ? 8 : 10, alignItems: "start" }}>
                         {months.map(monthBlock)}
@@ -2078,8 +2091,8 @@
                 <div style={{ maxWidth: 604, margin: "0 auto", padding: mob ? "0 8px" : "0 12px" }}>
                 {/* HOUSE */}
                 <div style={{ paddingTop: mob ? 4 : 8 }}>
-                  <House slot={slot} slotName={slotName} date={day.date} slotIdx={selSlot} showBird={showBird} deerV2={deerV2} />
-                  {deerV2 && <DeerPreviewPanel />}
+                  <House slot={slot} slotName={slotName} date={day.date} slotIdx={selSlot} showBird={showBird} deerV2={deer.use3d} />
+                  {deer.panel && <DeerPreviewPanel />}
                 </div>
 
                 {/* LEGEND (Bars-Zeile) */}
@@ -2337,7 +2350,7 @@
             }
           } catch(e) {}
         }
-        fetch(API_URL + "?format=json&pw=" + encodeURIComponent(password) + (archivePreviewOn() ? "&days=90" : ""))
+        fetch(API_URL + "?format=json&pw=" + encodeURIComponent(password) + (archivePreviewOn() ? "&days=" + archiveDays() : ""))
           .then(r => {
             if (!r.ok) throw new Error("HTTP " + r.status);
             return r.json();
