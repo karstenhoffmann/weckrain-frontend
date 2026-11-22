@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.10.0
+  Version: 1.11.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.10.0";
+    const FRONTEND_VERSION = "1.11.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -1835,13 +1835,51 @@
       return on && showBird;
     }
 
-    function DashboardMain({ history, lastPoll, backendVersion, showBird, onToggleBird }) {
+    // 3-Monats-Archiv (Vorschau): nur im Karsten-Modus mit ?archiv=1, bleibt per localStorage aktiv.
+    // ?archiv=0 schaltet zurück.
+    function archivePreviewOn() {
+      try {
+        const q = new URLSearchParams(window.location.search).get("archiv");
+        if (q === "1") localStorage.setItem("wetter_archiv", "1");
+        if (q === "0") localStorage.removeItem("wetter_archiv");
+        return localStorage.getItem("wetter_archiv") === "1" && localStorage.getItem("wetter_mode") === "karsten";
+      } catch (e) { return false; }
+    }
+
+    // Wetter eines Zeitfensters (Feld w der JSON-API, seit Backend 4.7.0)
+    const WX_LABEL = {
+      "clear-day": "Klar", "clear-night": "Klar", "partly-cloudy-day": "Teils bewölkt", "partly-cloudy-night": "Teils bewölkt",
+      cloudy: "Bewölkt", fog: "Nebel", wind: "Windig", rain: "Regen", sleet: "Schneeregen", snow: "Schnee", hail: "Hagel", thunderstorm: "Gewitter",
+    };
+    const deNum = (v, d) => Number(v).toLocaleString("de-DE", { maximumFractionDigits: d === undefined ? 1 : d });
+    function weatherText(w) {
+      if (!w) return null;
+      const parts = [];
+      if (w.icon && WX_LABEL[w.icon]) parts.push(WX_LABEL[w.icon]);
+      if (w.t !== null && w.t !== undefined) parts.push(deNum(w.t) + " °C");
+      if (w.rain) parts.push(deNum(w.rain) + " mm");
+      if (w.snow) parts.push(deNum(w.snow, 0) + " cm Schneedecke");
+      if (w.wind !== null && w.wind !== undefined) parts.push("Wind " + deNum(w.wind, 0) + " km/h" + (w.gust >= 40 ? ", Böen " + deNum(w.gust, 0) : ""));
+      return parts.length ? parts.join(" · ") : null;
+    }
+    // Aktivität eines Tages 0..1: Anteil der Zeitfenster, in denen Küche, Lesezimmer oder Eingang aktiv waren
+    const MONTHS_SHORT = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
+    const dayActivity = (d) => d.slots.filter(s => isOn(s.k) || isOn(s.s) || isOn(s.e)).length / 6;
+
+    function DashboardMain({ history: allHistory, lastPoll, backendVersion, showBird, onToggleBird }) {
       const deerV2 = useDeerV2(showBird);
+      const [week, setWeek] = useState(0);
       const [selDay, setSelDay] = useState(0);
       const [selSlot, setSelSlot] = useState(getNowSlot());
       const mob = useIsMobile();
       const bp = useBreakpoint();
       const lg = bp === "lg";
+
+      // Archiv: mehr als 7 Tage → wochenweise blättern (Woche 0 = die letzten 7 Tage)
+      const archive = !!allHistory && allHistory.length > 7;
+      const nWeeks = allHistory ? Math.max(1, Math.ceil(allHistory.length / 7)) : 1;
+      const wk = Math.min(week, nWeeks - 1);
+      const history = allHistory ? allHistory.slice(wk * 7, wk * 7 + 7) : allHistory;
 
       // Empty state
       if (!history || history.length === 0) {
@@ -1868,6 +1906,7 @@
       const bgBot = useAnimatedColor(bgBotTarget, 1200);
 
       const handleNow = useCallback(() => {
+        setWeek(0);
         setSelDay(0);
         setSelSlot(getNowSlot());
       }, []);
@@ -1916,9 +1955,33 @@
           {(() => {
             const weeklyGrid = (
               <div style={{ padding: lg ? "16px 24px" : mob ? "10px 6px 8px" : "14px 16px 8px" }}>
+                {archive ? (() => {
+                  const arrow = (dir, enabled) => (
+                    <button onClick={() => { if (enabled) { setWeek(wk + dir); setSelDay(0); } }} aria-label={dir > 0 ? "Woche davor" : "Woche danach"}
+                      style={{ background: "transparent", border: "none", cursor: enabled ? "pointer" : "default", color: enabled ? C.textMid : C.textFaint,
+                        opacity: enabled ? 1 : 0.35, fontSize: mob ? 20 : 22, lineHeight: 1, padding: "4px 12px", fontFamily: ff }}>
+                      {dir > 0 ? "\u2039" : "\u203A"}
+                    </button>
+                  );
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: mob ? 4 : 8, marginBottom: mob ? 10 : lg ? 16 : 12 }}>
+                      {arrow(1, wk < nWeeks - 1)}
+                      <div style={{ textAlign: "center", minWidth: mob ? 130 : 150 }}>
+                        <div style={{ fontSize: mob ? 11 : lg ? 13 : 12, color: C.textLo, textTransform: "uppercase", letterSpacing: 3, fontWeight: 500 }}>
+                          {wk === 0 ? "Diese Woche" : wk === 1 ? "Vorwoche" : "Vor " + wk + " Wochen"}
+                        </div>
+                        <div style={{ fontSize: mob ? 12 : 13, color: C.textFaint, marginTop: 3, fontFamily: ff }}>
+                          {fmt(history[history.length - 1].date)} – {fmt(history[0].date)}
+                        </div>
+                      </div>
+                      {arrow(-1, wk > 0)}
+                    </div>
+                  );
+                })() : (
                 <div style={{ fontSize: mob ? 11 : lg ? 13 : 12, color: C.textLo, textTransform: "uppercase", letterSpacing: 3, textAlign: "center", marginBottom: mob ? 12 : lg ? 20 : 16, fontWeight: 500 }}>
                   Wochenverlauf
                 </div>
+                )}
                 <div style={{
                   maxWidth: mob ? "100%" : 420, margin: "0 auto", display: "grid",
                   gridTemplateColumns: mob ? "54px repeat(6, 1fr)" : lg ? "64px repeat(6, 1fr)" : "60px repeat(6, 1fr)", gap: mob ? "4px 3px" : lg ? "8px 5px" : "5px 4px", alignItems: "center",
@@ -1946,6 +2009,54 @@
                     ];
                   })}
                 </div>
+                {archive && (() => {
+                  // Kalender der letzten Wochen: Spalten = Wochen (älteste links), Zeilen = Tage (neuester oben)
+                  const cell = mob ? 13 : 14, gap = 3;
+                  return (
+                    <div style={{ marginTop: mob ? 18 : 24, textAlign: "center" }}>
+                      <div style={{ fontSize: mob ? 11 : 12, color: C.textFaint, textTransform: "uppercase", letterSpacing: 2, marginBottom: 10 }}>
+                        Letzte {nWeeks > 4 ? Math.round(allHistory.length / 30) + " Monate" : nWeeks + " Wochen"}
+                      </div>
+                      <div style={{ display: "inline-flex", gap: 1, alignItems: "flex-end" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: gap, padding: "3px 4px 3px 0" }}>
+                          {Array.from({ length: 7 }, (_, r) => (
+                            <div key={r} style={{ height: cell, lineHeight: cell + "px", fontSize: 9, color: C.textFaint, textAlign: "right", fontFamily: ff }}>
+                              {r % 2 === 0 && allHistory[r] ? wday(allHistory[r].date) : ""}
+                            </div>
+                          ))}
+                        </div>
+                        {Array.from({ length: nWeeks }, (_, c) => {
+                          const w = nWeeks - 1 - c, selW = w === wk;
+                          // Monatsname, sobald der neueste Tag der Spalte in einem neuen Monat liegt (erste Spalte immer)
+                          const cur = allHistory[w * 7];
+                          const newMon = (cc) => { const ww = nWeeks - 1 - cc, a = allHistory[ww * 7], b = allHistory[(ww + 1) * 7]; return a && b && a.date.slice(5, 7) !== b.date.slice(5, 7); };
+                          // erste Spalte nur beschriften, wenn die zweite nicht schon einen neuen Monat zeigt
+                          const mon = cur && (c === 0 ? !newMon(1) : newMon(c)) ? MONTHS_SHORT[+cur.date.slice(5, 7) - 1] : "";
+                          return (
+                            <div key={c} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                              <div style={{ height: 14, fontSize: 9, color: C.textFaint, whiteSpace: "nowrap", fontFamily: ff, width: cell + 6, textAlign: "left", overflow: "visible" }}>{mon}</div>
+                              <div onClick={() => { setWeek(w); setSelDay(0); }} style={{ display: "flex", flexDirection: "column", gap: gap, padding: 2, borderRadius: 5, cursor: "pointer",
+                                border: "1px solid " + (selW ? "rgba(232,237,245,0.45)" : "transparent"), transition: T("0.2s") }}>
+                                {Array.from({ length: 7 }, (_, r) => {
+                                  const d = allHistory[w * 7 + r];
+                                  if (!d) return <div key={r} style={{ width: cell, height: cell }} />;
+                                  const a = dayActivity(d), selD = selW && r === selDay, prob = dayHasProblems(d);
+                                  return (
+                                    <div key={r} title={wday(d.date) + " " + fmt(d.date)} onClick={(e) => { e.stopPropagation(); setWeek(w); setSelDay(r); }}
+                                      style={{ width: cell, height: cell, borderRadius: 3, boxSizing: "border-box",
+                                        background: a > 0 ? "rgba(240,196,90," + (0.12 + a * 0.78).toFixed(2) + ")" : prob ? "rgba(194,122,90,0.35)" : "#1a2030",
+                                        border: selD ? "1.5px solid " + C.textHi : "none" }} />
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div style={{ fontSize: 11, color: C.textFaint, marginTop: 8, fontFamily: ff }}>Heller = mehr Zeitfenster mit Aktivität</div>
+                    </div>
+                  );
+                })()}
               </div>
             );
 
@@ -1981,6 +2092,11 @@
                 <div style={{ textAlign: "center", padding: mob ? "4px 0 8px" : lg ? "6px 0 14px" : "4px 0 8px", fontSize: mob ? 12 : lg ? 14 : 12, color: C.textFaint, fontFamily: ff, opacity: 0.8 }}>
                   Leuchtet, sobald im Zeitfenster etwas aktiv war
                 </div>
+                {showBird && weatherText(slot.w) && (
+                  <div style={{ textAlign: "center", padding: "0 0 6px", fontSize: mob ? 12 : lg ? 14 : 12, color: C.textLo, fontFamily: ff }}>
+                    {weatherText(slot.w)}
+                  </div>
+                )}
 
                 {/* TIME SLOTS (Stacked Bars) */}
                 <div style={{ display: "flex", justifyContent: "space-between", gap: mob ? 3 : "clamp(3px, 0.6vw, 8px)", padding: mob ? "10px 0 8px" : "clamp(10px, 1.5vw, 16px) 0 clamp(8px, 1vw, 12px)" }}>
@@ -2209,7 +2325,7 @@
             }
           } catch(e) {}
         }
-        fetch(API_URL + "?format=json&pw=" + encodeURIComponent(password))
+        fetch(API_URL + "?format=json&pw=" + encodeURIComponent(password) + (archivePreviewOn() ? "&days=90" : ""))
           .then(r => {
             if (!r.ok) throw new Error("HTTP " + r.status);
             return r.json();
