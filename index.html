@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.11.0
+  Version: 1.11.1
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.11.0";
+    const FRONTEND_VERSION = "1.11.1";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -1928,7 +1928,7 @@
           </header>
 
           {/* DAY TABS */}
-          <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-end", gap: lg ? 4 : 0, padding: mob ? "6px 4px 6px" : lg ? "8px 16px 16px" : "10px 8px 8px", overflowX: "auto", scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
+          <div style={{ display: "flex", justifyContent: "safe center", alignItems: "flex-end", gap: lg ? 4 : 0, padding: mob ? "6px 4px 6px" : lg ? "8px 16px 16px" : "10px 8px 8px", overflowX: "auto", scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
             {[{ key: "now", label: "Jetzt" }, ...history.map((d, i) => ({ key: d.date, label: wday(d.date), sub: fmt(d.date), idx: i, problems: dayHasProblems(d) }))].map((item, arrIdx) => {
               const isNow = item.key === "now";
               const sel = !isNow && item.idx === selDay;
@@ -1938,11 +1938,13 @@
                     style={{
                       background: sel ? "rgba(255,255,255,0.05)" : "transparent",
                       border: "none", borderBottom: sel ? "2px solid "+C.kitchen.on : "2px solid transparent",
-                      borderRadius: "8px 8px 0 0", padding: mob ? "8px 10px 6px" : lg ? "10px 20px 8px" : "8px 14px 6px", cursor: "pointer", flex: "0 0 auto",
+                      borderRadius: "8px 8px 0 0", padding: mob ? (isNow ? "8px 8px 6px" : "8px 1px 6px") : lg ? "10px 20px 8px" : "8px 14px 6px", cursor: "pointer",
+                      // Handy: Tage teilen sich die Breite, damit alle 7 plus „Jetzt“ ohne Scrollen passen
+                      flex: mob && !isNow ? "1 1 0" : "0 0 auto", minWidth: 0,
                       textAlign: "center", transition: T("0.3s"),
                     }}>
-                    <div style={{ fontSize: mob ? 14 : lg ? 15 : 13, color: sel ? C.textHi : C.textLo, fontWeight: sel ? 500 : 400, fontFamily: ff }}>{item.label}</div>
-                    {!isNow && <div style={{ fontSize: mob ? 12 : lg ? 13 : 11, color: sel ? C.textLo : C.textFaint, fontFamily: ff, marginTop: 1 }}>{item.sub}</div>}
+                    <div style={{ fontSize: mob ? 14 : lg ? 15 : 13, color: sel ? C.textHi : C.textLo, fontWeight: sel ? 500 : 400, fontFamily: ff, whiteSpace: "nowrap" }}>{item.label}</div>
+                    {!isNow && <div style={{ fontSize: mob ? 11 : lg ? 13 : 11, color: sel ? C.textLo : C.textFaint, fontFamily: ff, marginTop: 1, whiteSpace: "nowrap", letterSpacing: mob ? -0.2 : 0 }}>{item.sub}</div>}
                     {!isNow && item.problems && <div style={{ width: 4, height: 4, borderRadius: "50%", backgroundColor: C.error, margin: "4px auto 0", opacity: 0.7 }} />}
                   </button>
                   {isNow && <div style={{ width: 1, height: 20, backgroundColor: "rgba(255,255,255,0.06)", margin: "0 4px", alignSelf: "center" }} />}
