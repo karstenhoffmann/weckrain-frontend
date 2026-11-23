@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.23.0
+  Version: 1.24.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.23.0";
+    const FRONTEND_VERSION = "1.24.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -918,15 +918,34 @@
         const t = new T.Group(); t.position.set(x, 0, z); add(t);
         const segs = [], knots = [], twigs = [], tKnots = [];
         const trunk = limbC(segs, knots, opt.trunk.map(([a, b, c]) => V(a, b, c)), opt.r, opt.r * 0.42);
+        const mains = [trunk];
         opt.branches.forEach(([u, pts, rf]) => {
           const p0 = trunk.getPoint(u);
-          const crv = limbC(segs, knots, [p0, ...pts.map(([a, b, c]) => V(a, b, c))], opt.r * rf, opt.r * rf * 0.3);
-          // Winterzweige: kurze, nach oben geschwungene Verzweigungen am Astende
-          const end = crv.getPoint(1), dir = crv.getTangent(1);
-          [[-0.5, 0.9], [0.45, 0.8], [0.05, 1.1]].forEach(([dx, dy]) => {
-            const e = end.clone().add(V(dir.x * 8 + dx * 12, dy * 13, (rnd() - 0.5) * 6));
-            limbC(twigs, tKnots, [end.clone(), end.clone().lerp(e, 0.5).add(V(dx * 3, 2, 0)), e], opt.r * rf * 0.3, opt.r * 0.06);
-          });
+          mains.push(limbC(segs, knots, [p0, ...pts.map(([a, b, c]) => V(a, b, c))], opt.r * rf, opt.r * rf * 0.3));
+        });
+        // Kronenholz (sichtbar, sobald die Krone sich lichtet): vom nächsten Hauptast in jeden Blattballen,
+        // dort fächern Zweige nach oben-außen auf, mit kleinen Gabeln an den Spitzen. So hat der kahle Baum
+        // dieselbe Silhouette wie der belaubte.
+        const tips = [];
+        opt.crown.forEach(([cx, cy, cz, r]) => {
+          const c = V(cx, cy, cz);
+          let best = null, bd = 1e9;
+          mains.forEach((cv) => { for (let u = 0.35; u <= 1.001; u += 0.05) { const p = cv.getPoint(Math.min(u, 1)); const d = p.distanceTo(c); if (d < bd && p.y < c.y + 4) { bd = d; best = p; } } });
+          if (!best) best = trunk.getPoint(0.9);
+          const base = c.clone().add(V(0, -r * 0.25, 0));
+          limbC(twigs, tKnots, [best.clone(), best.clone().lerp(base, 0.5).add(V(0, r * 0.12, 0)), base], opt.r * 0.26, opt.r * 0.14);
+          const n = r > 25 ? 4 : 3;
+          for (let k = 0; k < n; k++) {
+            const a = -0.95 + 1.9 * k / (n - 1) + (rnd() - 0.5) * 0.3;
+            const e = base.clone().add(V(Math.sin(a) * r * 0.85, Math.cos(a) * r * 0.72 + r * 0.12, (rnd() - 0.5) * r * 0.5));
+            limbC(twigs, tKnots, [base.clone(), base.clone().lerp(e, 0.5).add(V(Math.sin(a) * r * 0.1, r * 0.12, 0)), e], opt.r * 0.13, opt.r * 0.035);
+            [-1, 1].forEach((sd) => {
+              const f = e.clone().add(V(Math.sin(a + sd * 0.6) * r * 0.3, Math.cos(a + sd * 0.6) * r * 0.3, (rnd() - 0.5) * 3));
+              limbC(twigs, tKnots, [e.clone(), e.clone().lerp(f, 0.5).add(V(0, 1, 0)), f], opt.r * 0.04, opt.r * 0.018);
+              tips.push([f, r]);
+            });
+            tips.push([e, r]);
+          }
         });
         // Wurzelansatz
         [[-1, 0.3], [1, 0.2], [0, 1]].forEach(([dx, dz]) => limbC(segs, knots, [V(0, opt.r * 1.6, 0), V(dx * opt.r * 1.2, opt.r * 0.35, dz * opt.r * 0.7), V(dx * opt.r * 2.1, 0, dz * opt.r * 1.3)], opt.r * 0.55, opt.r * 0.2));
@@ -938,11 +957,23 @@
         // Krone: Wolke aus Kugeln, je Kugel eigene Farbe (für Herbst-Patchwork)
         const crown = new T.Group(); t.add(crown);
         const blobs = opt.crown.map(([cx, cy, cz, r], i) => { const m = toon(0x5e8a4a); const b = ball(m, cx, cy, cz, r, r * 0.92, r * 0.82, crown); b.userData.r = r; b.userData.i = i; return b; });
-        return { group: t, crown, blobs, twigG, x, z, leafPts: opt.crown.map(([cx, cy, cz, r]) => V(cx, cy, cz)), blossom: opt.blossom };
+        // Laubbüschel an den Zweigspitzen (Spätherbst): wenige gemeinsame Materialien
+        const tipMats = [0, 1, 2, 3].map(() => toon(0xc07a34));
+        const tipG = new T.Group(); crown.add(tipG);
+        // je Zweigspitze ein flaches Büschel aus drei kleinen Blattgruppen (keine runden „Früchte“)
+        const tipBalls = tips.map(([p, r], i) => {
+          const g = new T.Group(); g.position.copy(p); g.rotation.z = (rnd() - 0.5) * 0.8; tipG.add(g);
+          const rr = Math.max(2.4, r * 0.13);
+          [[0, 0, 1], [-1.1, -0.5, 0.75], [1.05, -0.35, 0.7]].forEach(([dx, dy, s], k) =>
+            ball(tipMats[(i + k) % 4], dx * rr, dy * rr, (rnd() - 0.5) * rr, rr * s * 1.15, rr * s * 0.55, rr * s * 0.8, g));
+          g.userData.r = rr * 1.6; return g;
+        });
+        let y0 = 1e9, y1 = -1e9; opt.crown.forEach(([, cy]) => { y0 = Math.min(y0, cy); y1 = Math.max(y1, cy); });
+        return { group: t, crown, blobs, twigG, tipG, tipBalls, tipMats, x, z, yRange: [y0, y1], blossom: opt.blossom };
       };
       const trees = [
         // großer Hausbaum links, vom Bildrand angeschnitten
-        treeKit(22, -104, { r: 8, trunk: [[0, -1, 0], [3, 40, 0], [-2, 82, 0], [4, 118, 0]],
+        treeKit(40, -104, { r: 8, trunk: [[0, -1, 0], [3, 40, 0], [-2, 82, 0], [4, 118, 0]],
           branches: [[0.55, [[26, 92, 6], [44, 118, 4]], 0.5], [0.72, [[-20, 104, 4], [-34, 130, 0]], 0.45], [0.9, [[18, 134, -4], [26, 156, 0]], 0.4]],
           crown: [[6, 138, 0, 40], [38, 124, 8, 30], [-28, 128, 6, 31], [18, 166, -4, 30], [-14, 164, 2, 28], [48, 150, 0, 22], [-40, 150, 0, 22], [0, 110, 18, 26], [30, 104, 16, 18], [-22, 106, 16, 18]] }),
         // kleiner runder Baum rechts hinten, angeschnitten, im Hintergrund
@@ -989,8 +1020,10 @@
       const SEASON = {
         fruehling:   { cols: [0x74a453, 0x80ae5a, 0x6b9b4e], keep: 0.9, bloom: true, flowers: true, fall: 0, ground: 0 },
         sommer:      { cols: [0x4e7a42, 0x47723f, 0x557f47], keep: 1, flowers: true, fall: 0.02, ground: 0 },
-        herbst:      { cols: [0x8a9a42, 0xc9a23a, 0xd38a34, 0xc86a30, 0xb35233, 0x6f8a44], keep: 1, fall: 0.35, ground: 40 },
-        spaetherbst: { cols: [0xcf8a34, 0xbb5f2e, 0xa84a30, 0xc8a044], keep: 0.4, fall: 0.9, ground: 140 },
+        // Herbst: weicher Verlauf über die Krone (unten gelbgrün, Mitte golden, oben orange-rost), je Baum eigene Tönung
+        herbst:      { cols: [0xc9a23a, 0xd38a34, 0xc86a30, 0xb35233, 0x9a9a44], keep: 1, fall: 0.35, ground: 40,
+                       grad: [[[0, 0x9a9a42], [0.45, 0xcf9a36], [1, 0xc8662e]], [[0, 0xb4802e], [0.5, 0xc2602c], [1, 0xa8442c]]] },
+        spaetherbst: { cols: [0xbf883c, 0xab6630, 0x96502f, 0xb59a4a], keep: 0, tips: 0.65, fall: 0.9, ground: 140 },
         winter:      { cols: [0x8a6a3a], keep: 0, fall: 0, ground: 0 },
       };
       let seasonNow = null;
@@ -1012,14 +1045,26 @@
       const applySeason = (name) => {
         const P = SEASON[name] || SEASON.sommer;
         trees.forEach((tr, ti) => {
+          const ca = new T.Color(), cb = new T.Color();
+          const gradCol = (stops, u, out) => {
+            for (let s = 1; s < stops.length; s++) if (u <= stops[s][0] || s === stops.length - 1) {
+              const [u0, h0] = stops[s - 1], [u1, h1] = stops[s];
+              return out.setHex(h0).lerp(cb.setHex(h1), c3((u - u0) / (u1 - u0), 0, 1));
+            }
+            return out;
+          };
           tr.blobs.forEach((b, i) => {
             const show = P.keep >= 1 || (P.keep > 0 && ((i * 7 + ti * 3) % 10) / 10 < P.keep);
-            b.visible = show; b.scale.setScalar(1); b.scale.set(b.userData.r, b.userData.r * 0.92, b.userData.r * 0.82);
-            if (P.keep < 1 && show) b.scale.multiplyScalar(0.8);
-            b.material.color.setHex(P.cols[(i * 5 + ti) % P.cols.length]);
-            if (P.bloom && tr.blossom) b.material.color.lerp(new T.Color(0xf3c9d8), i % 2 ? 0.55 : 0.25);
+            b.visible = show; b.scale.set(b.userData.r, b.userData.r * 0.92, b.userData.r * 0.82);
+            if (P.grad) {
+              const u = (b.position.y - tr.yRange[0]) / Math.max(1, tr.yRange[1] - tr.yRange[0]);
+              gradCol(P.grad[ti % P.grad.length], c3(u + ((i * 37) % 10 - 5) * 0.025, 0, 1), b.material.color);
+            } else b.material.color.setHex(P.cols[(i * 5 + ti) % P.cols.length]);
+            if (P.bloom && tr.blossom) b.material.color.lerp(ca.setHex(0xf3c9d8), i % 2 ? 0.55 : 0.25);
           });
           tr.twigG.visible = P.keep < 1;
+          tr.tipMats.forEach((m, i) => m.color.setHex(P.cols[i % P.cols.length]));
+          tr.tipBalls.forEach((b, i) => { b.visible = !!P.tips && ((i * 7 + ti * 5) % 10) / 10 < P.tips; });
         });
         flowers.visible = !!P.flowers;
         groundN = 0; groundLeaves.count = 0;
@@ -1035,7 +1080,8 @@
         while (fallAcc > 1) {
           fallAcc -= 1;
           const f = fallers.find((q) => !q.on), tr = trees[Math.random() < 0.7 ? 0 : 1];
-          const vis = tr.blobs.filter((b) => b.visible); if (!f || !vis.length) break;
+          let vis = tr.blobs.filter((b) => b.visible); if (!vis.length) vis = tr.tipBalls.filter((b) => b.visible);
+          if (!f || !vis.length) break;
           const b = vis[Math.floor(Math.random() * vis.length)];
           f.on = true; f.p.set(tr.x + b.position.x + (Math.random() - 0.5) * b.userData.r, b.position.y - b.userData.r * 0.6, tr.z + b.position.z + b.userData.r * 0.5);
           f.vy = 6 + Math.random() * 4; f.ph = Math.random() * 6.28; f.sp = 1.4 + Math.random() * 1.6; f.drift = 2 + Math.random() * 4;
