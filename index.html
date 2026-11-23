@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.27.0
+  Version: 1.28.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.27.0";
+    const FRONTEND_VERSION = "1.28.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -603,7 +603,7 @@
       mat.needsUpdate = true;
     }
 
-    // ─── 3D-SZENE (Vorschau ?szene=3d) ───────────────────────────────────
+    // ─── 3D-SZENE (Vorschau, Standard im Karsten-Modus) ─────────────────────
     // Haus, Garten und Bäume als echte 3D-Objekte im selben Canvas wie das Reh.
     // Gleiche Kamera wie das Reh (orthografisch, 10° von oben). Die Hausfront liegt so in der Tiefe,
     // dass sie pixelgenau dort erscheint, wo sie im SVG lag; Zaun, Büsche, Bäume stehen davor.
@@ -611,9 +611,10 @@
     function scenePreviewOn() {
       try {
         const q = new URLSearchParams(window.location.search).get("szene");
-        if (q === "3d") localStorage.setItem("wetter_szene", "3d");
-        if (q === "2d") localStorage.removeItem("wetter_szene");
-        return localStorage.getItem("wetter_szene") === "3d" && localStorage.getItem("wetter_mode") === "karsten";
+        // Standard im Karsten-Modus (Vorschau). ?szene=2d schaltet auf diesem Gerät zurück, ?szene=3d wieder an.
+        if (q === "2d") localStorage.setItem("wetter_szene", "2d");
+        if (q === "3d") localStorage.removeItem("wetter_szene");
+        return localStorage.getItem("wetter_szene") !== "2d" && localStorage.getItem("wetter_mode") === "karsten";
       } catch (e) { return false; }
     }
 
