@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.26.0
+  Version: 1.27.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.26.0";
+    const FRONTEND_VERSION = "1.27.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -1448,7 +1448,7 @@
       live.current = { sleeping, light, isDayish, winter, scene: sceneState, noBf };
 
       useEffect(() => {
-        let raf = 0, disposed = false, renderer = null, ro = null;
+        let raf = 0, disposed = false, renderer = null, ro = null, cleanupCam = null;
         loadThree().then((T) => {
           if (disposed) return;
           const canvas = canvasRef.current;
@@ -1468,6 +1468,7 @@
           const J = buildDeer3D(T);
           scene.add(J.root, J.bf);
           const S3 = live.current.scene ? buildScene3D(T, scene, renderer) : null;
+          let CAM3 = null;
           if (S3) {
             // Leichte echte Zentralperspektive: Dach verjüngt sich nach hinten, Vordergrund (Reh) wirkt ~10 % größer.
             // Die Hausfront (z = ZH) bleibt pixelgenau an ihrer SVG-Position; Bildmitte der Perspektive auf Höhe des Rehs.
@@ -1481,6 +1482,9 @@
             pc.projectionMatrixInverse.copy(pc.projectionMatrix).invert();
             scene.userData.projY = pc.projectionMatrix.elements[5];
             cam = pc;
+            // Kamera-Steuerung: Zoom aufs Reh (Ausschnitt der Projektion, bleibt scharf) und leichtes Kippen per Handy-Neigung
+            CAM3 = { A, D, n, C0: pc.position.clone(), baseProj: pc.projectionMatrix.clone(), z: 1, on: false, cx: 260, cy: 160, crop: [0, 0, 520, 320],
+                     tiltX: 0, tiltY: 0, nb: null, ng: null, rawB: null, rawG: null, perm: false, cssZoom: false };
             // Szene bringt eigenes Licht und Schatten mit: Reh wirft echten Schatten, Klecks-Schatten nur noch zart
             J.root.traverse((c) => { if (c.isMesh && c !== J.shadow) c.castShadow = true; });
             J.shadow.material.opacity = 0.2;
@@ -1639,6 +1643,86 @@
           };
 
           const tmp = new T.Vector3();
+          // ── Zoom aufs Reh und Neigung (nur 3D-Szene) ──
+          // Punkt → ungezoomte NDC-Koordinaten (für SVG-Ebenen, Trefferprüfung)
+          const toBase = (v) => v.applyMatrix4(cam.matrixWorldInverse).applyMatrix4(CAM3.baseProj);
+          const deerSvg = () => {
+            const p = new T.Vector3(); J.root.getWorldPosition(p); p.y += 17 * J.root.scale.y;
+            toBase(p); return [(p.x + 1) / 2 * 520, (1 - p.y) / 2 * 320];
+          };
+          const wrap = canvasRef.current && canvasRef.current.parentElement;
+          const layers = () => wrap ? Array.from(wrap.children).filter((el) => el !== canvasRef.current) : [];
+          const reduceTilt = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+          const onOrient = (e) => { if (e.beta == null || e.gamma == null || !CAM3) return; CAM3.rawB = e.beta; CAM3.rawG = e.gamma; };
+          const enableTilt = () => {
+            if (!CAM3 || CAM3.perm || reduceTilt || typeof window.DeviceOrientationEvent === "undefined") return;
+            CAM3.perm = true;
+            const DOE = window.DeviceOrientationEvent;
+            if (typeof DOE.requestPermission === "function") {
+              DOE.requestPermission().then((r) => { if (r === "granted") window.addEventListener("deviceorientation", onOrient); }).catch(() => {});
+            } else window.addEventListener("deviceorientation", onOrient);
+          };
+          const toSvg = (ev) => {
+            const r = wrap.getBoundingClientRect(), [x0, y0, x1, y1] = CAM3.crop;
+            return [x0 + (ev.clientX - r.left) / r.width * (x1 - x0), y0 + (ev.clientY - r.top) / r.height * (y1 - y0), r.width / 520];
+          };
+          const onDeer = (ev) => {
+            const [sx, sy, u] = toSvg(ev), [dx, dy] = deerSvg();
+            const rad = Math.max(30, 26 / (u * CAM3.z));                 // mindestens ~44 px Trefferfläche
+            return Math.hypot((sx - dx) * 0.8, sy - dy) < rad;
+          };
+          let downAt = null;
+          const onDown = (ev) => { downAt = [ev.clientX, ev.clientY]; };
+          const onUp = (ev) => {
+            if (!CAM3 || !downAt || Math.hypot(ev.clientX - downAt[0], ev.clientY - downAt[1]) > 12) return;
+            if (ev.target && ev.target.closest && ev.target.closest("button")) return;
+            enableTilt();
+            if (CAM3.on) CAM3.on = false; else if (onDeer(ev)) CAM3.on = true;
+          };
+          const onMove = (ev) => { if (CAM3 && wrap && ev.pointerType === "mouse") wrap.style.cursor = CAM3.on || onDeer(ev) ? "pointer" : ""; };
+          if (CAM3 && window.__deerApi) { window.__deerApi.screen = () => deerSvg(); window.__deerApi.zoom = () => CAM3.z; }
+          if (CAM3 && wrap) {
+            cleanupCam = () => { wrap.removeEventListener("pointerdown", onDown); wrap.removeEventListener("pointerup", onUp); wrap.removeEventListener("pointermove", onMove);
+              window.removeEventListener("deviceorientation", onOrient); layers().forEach((el) => { el.style.transform = ""; }); wrap.style.cursor = ""; };
+            wrap.addEventListener("pointerdown", onDown); wrap.addEventListener("pointerup", onUp); wrap.addEventListener("pointermove", onMove);
+            if (!(window.DeviceOrientationEvent && typeof window.DeviceOrientationEvent.requestPermission === "function")) enableTilt();
+          }
+          const updateCam3 = (dt) => {
+            const C = CAM3;
+            // Neigung: Abweichung von einer langsam mitlaufenden Neutralstellung, weich, max. ein paar Grad
+            if (C.rawB !== null) {
+              if (C.nb === null) { C.nb = C.rawB; C.ng = C.rawG; }
+              const f = 1 - Math.exp(-dt / 4);
+              C.nb += (C.rawB - C.nb) * f; C.ng += (C.rawG - C.ng) * f;
+              const tx = c3((C.rawG - C.ng) / 25, -1, 1), ty = c3((C.rawB - C.nb) / 25, -1, 1);
+              const g = 1 - Math.exp(-dt / 0.25); C.tiltX += (tx - C.tiltX) * g; C.tiltY += (ty - C.tiltY) * g;
+            }
+            const off = C.C0.clone().sub(C.A);
+            off.applyAxisAngle(new T.Vector3(0, 1, 0), -C.tiltX * rad(3.2));
+            off.applyAxisAngle(new T.Vector3(1, 0, 0).applyAxisAngle(new T.Vector3(0, 1, 0), -C.tiltX * rad(3.2)), C.tiltY * rad(2.2));
+            cam.position.copy(C.A).add(off); cam.lookAt(C.A); cam.updateMatrixWorld(true);
+            // Zoom: weich ein/aus, Ausschnitt folgt dem Reh
+            const zk = 1 - Math.exp(-dt / 0.45);
+            C.z += ((C.on ? 2.3 : 1) - C.z) * zk;
+            const [tx, ty] = C.on ? deerSvg() : [260, 160];
+            const ck = 1 - Math.exp(-dt / (C.on ? 0.55 : 0.45));
+            C.cx += (tx - C.cx) * ck; C.cy += (ty - 6 - C.cy) * ck;
+            const w = 520 / C.z, h = 320 / C.z;
+            const x0 = c3(C.cx - w / 2, 0, 520 - w), y0 = c3(C.cy - h / 2, 0, 320 - h);
+            C.crop = [x0, y0, x0 + w, y0 + h];
+            const k = C.n / C.D;
+            cam.projectionMatrix.makePerspective((x0 - 260) * k, (x0 + w - 260) * k, (290 - y0) * k, (290 - y0 - h) * k, C.n, cam.far);
+            cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
+            scene.userData.projY = cam.projectionMatrix.elements[5];
+            // SVG-Ebenen (Himmel, Vogel, Zzz, Hinweise) zoomen synchron per CSS
+            const zoomed = C.z > 1.002;
+            if (zoomed || C.cssZoom) {
+              const u = wrap ? wrap.clientWidth / 520 : 1;
+              const tr = zoomed ? `translate(${(-x0 * u * C.z).toFixed(2)}px, ${(-y0 * u * C.z).toFixed(2)}px) scale(${C.z.toFixed(4)})` : "";
+              layers().forEach((el) => { el.style.transformOrigin = "0 0"; el.style.transform = tr; });
+              C.cssZoom = zoomed;
+            }
+          };
           const frame = () => {
             raf = requestAnimationFrame(frame);
             const pnow = deerClock();
@@ -2019,9 +2103,10 @@
               J.nose.getWorldPosition(tmp);
               const op = c3((c.eyes - 0.6) / 0.4, 0, 1);
               zzzRef.current.setAttribute("opacity", op.toFixed(3));
-              const pz = tmp.clone().project(cam);       // funktioniert für beide Kameras
+              const pz = CAM3 ? toBase(tmp.clone()) : tmp.clone().project(cam);   // ungezoomte Bildkoordinaten
               zzzRef.current.setAttribute("transform", `translate(${((pz.x + 1) / 2 * 520 - 60 - 4).toFixed(1)}, ${((1 - pz.y) / 2 * 320 - 10).toFixed(1)})`);
             }
+            if (CAM3) updateCam3(dt);
             renderer.render(scene, cam);
           };
           raf = requestAnimationFrame(frame);
@@ -2032,6 +2117,7 @@
           if (ro) ro.disconnect();
           if (renderer) renderer.dispose();
           if (window.__deerApi) delete window.__deerApi;
+          if (cleanupCam) cleanupCam();
         };
       }, []);
 
@@ -2396,7 +2482,7 @@
       } : null;
 
       return (
-        <div style={{ position: "relative", width: "100%", maxWidth: 580, margin: "0 auto" }}>
+        <div style={{ position: "relative", width: "100%", maxWidth: 580, margin: "0 auto", ...(s3 ? { overflow: "hidden", borderRadius: "3.08% / 5%", touchAction: "manipulation" } : {}) }}>
         <svg viewBox="0 0 520 320" fill="none" style={{ width: "100%", display: "block" }}>
           <defs>
             <radialGradient id="gK" cx="0.35" cy="0.55" r="0.45">
