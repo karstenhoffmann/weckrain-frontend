@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.25.0
+  Version: 1.26.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.25.0";
+    const FRONTEND_VERSION = "1.26.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -617,6 +617,11 @@
       } catch (e) { return false; }
     }
 
+    // Schneedecke zu Beginn (Vorschau): ?schnee=0..1 (Standard 0 = leer, wächst während es schneit)
+    function snowStartAmount() {
+      try { const q = parseFloat(new URLSearchParams(window.location.search).get("schnee")); return isNaN(q) ? 0 : Math.max(0, Math.min(1, q)); } catch (e) { return 0; }
+    }
+
     // Hausvariante der 3D-Vorschau: ?haus=a|b|c|d (Standard a, von Karsten gewählt)
     function houseVariant() {
       try {
@@ -969,7 +974,7 @@
           g.userData.r = rr * 1.6; return g;
         });
         let y0 = 1e9, y1 = -1e9; opt.crown.forEach(([, cy]) => { y0 = Math.min(y0, cy); y1 = Math.max(y1, cy); });
-        return { group: t, crown, blobs, twigG, tipG, tipBalls, tipMats, x, z, yRange: [y0, y1], blossom: opt.blossom };
+        return { group: t, crown, blobs, twigG, tipG, tipBalls, tipMats, x, z, yRange: [y0, y1], blossom: opt.blossom, segs, twigs };
       };
       const trees = [
         // großer Hausbaum links, vom Bildrand angeschnitten
@@ -1182,6 +1187,145 @@
         const h = renderer.domElement.height;
         sMat.uniforms.uScale.value = h * 0.5 * (scene.userData.projY || 5);
       };
+      // ── Liegender Schnee (Stufe 3): wächst dort, wo Flocken landen ──
+      // Rasen: jede gelandete Flocke hinterlässt einen Tupfer in einer Schneekarte (Canvas). Aus verstreuten Punkten
+      // werden Flecken, dann eine geschlossene Decke mit sanften Buckeln; das Reh hinterlässt Spuren.
+      // Dach, Fensterbänke, Vordach, Briefkasten, Schornstein, Zaun, Büsche, Tanne, kahle Äste: Hauben, die
+      // aus einzelnen Flecken (Rauschmaske mit sinkender Schwelle) zu rundlichen Polstern wachsen.
+      const SNOW_GROW = 150;                         // Sekunden Schneefall bis zur vollen Decke
+      let cover = snowStartAmount();
+      const snowWhite = 0xf3f6fb;
+      const noiseTex = (() => {
+        const c = document.createElement("canvas"); c.width = c.height = 256; const g = c.getContext("2d");
+        g.fillStyle = "rgb(18,18,18)"; g.fillRect(0, 0, 256, 256); g.globalCompositeOperation = "lighter";
+        let ns = 91; const nr = () => (ns = (ns * 16807) % 2147483647) / 2147483647;
+        for (let i = 0; i < 260; i++) {
+          const x = nr() * 256, y = nr() * 256, r = 5 + nr() * 24, a = 0.18 + nr() * 0.3;
+          for (const [ox, oy] of [[0, 0], [256, 0], [-256, 0], [0, 256], [0, -256]]) {
+            const gr = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
+            gr.addColorStop(0, "rgba(255,255,255," + a + ")"); gr.addColorStop(1, "rgba(255,255,255,0)"); g.fillStyle = gr; g.fillRect(x + ox - r, y + oy - r, 2 * r, 2 * r);
+          }
+        }
+        const t = new T.CanvasTexture(c); t.wrapS = t.wrapT = T.RepeatWrapping; return t;
+      })();
+      const capMats = [];
+      const capMat = (rate, rep) => {
+        const tex = noiseTex.clone(); tex.needsUpdate = true; tex.repeat.set(rep || 1, rep || 1);
+        const m = new T.MeshToonMaterial({ color: snowWhite, gradientMap: grad, alphaMap: tex, alphaTest: 0.97 });
+        capMats.push({ m, rate }); return m;
+      };
+      const snowLayer = new T.Group(); add(snowLayer);
+      const domes = [];
+      const dome = (mat, x, y, z, rx, maxH, rz, rate, rotZ) => {
+        const m = mesh(SPH, mat, false, true); m.position.set(x, y, z); if (rotZ) m.rotation.z = rotZ;
+        m.userData = { rx, maxH, rz, rate, y }; snowLayer.add(m); domes.push(m); return m;
+      };
+      const capA = capMat(1.15, 0.6), capB = capMat(0.9, 0.8), capFir = capMat(0.62, 1.1), capTree = capMat(0.7, 2);
+      // Fensterbänke, Vordach, Briefkasten, Schornstein
+      [190, 330].forEach((cx) => dome(capA, cx, yAt(210.5, ZH + 4.5), ZH + 4.5, 35, 3.6, 5, 1.15));
+      { const cy = yAt(206, ZH + 14) + 2, cz = ZH + 9;
+        [-1, 1].forEach((sd) => dome(capA, 260 + sd * 13.5, cy - Math.abs(0) , cz, 16, 3.2, 11, 1.05, sd * -0.42)); }
+      dome(capA, 300, 37, -112, 7.5, 3.2, 9.5, 1.1);
+      dome(capA, chimX, chimTop + 3, chimZ, 14.5, 4, 13.5, 1.0);
+      // Zaun: Polster auf der oberen Latte
+      [[62, 125], [396, 432]].forEach(([x0, x1]) => dome(capB, (x0 + x1) / 2, 17.3, -129.8, (x1 - x0) / 2 + 3, 1.6, 1.4, 0.95));
+      // Büsche
+      [[138, -150, 15], [392, -156, 11], [-4, 18, 22]].forEach(([x, z, r]) => dome(capB, x, r * 1.38, z, r * 0.7, r * 0.22, r * 0.6, 0.95));
+      // Dach: Schneeschicht auf beiden Dachflächen (Rauschmaske, Höhe über Verschiebung) und vorn eine Kante
+      const roofSnowMats = [];
+      [-1, 1].forEach((sd) => {
+        const g = new T.Group();
+        const ca = Math.cos(slopeA), sa = Math.sin(slopeA), nx = sd < 0 ? -sa : sa, ny = ca;
+        const mx = ((sd < 0 ? 100 : 420) + 260) / 2, my = (yEave + yA) / 2;
+        g.position.set(mx + nx * RT, my + ny * RT, ZH - DEP / 2); g.rotation.z = sd < 0 ? slopeA : -slopeA; snowLayer.add(g);
+        const tex = noiseTex.clone(); tex.needsUpdate = true; tex.repeat.set(2.2, 1.2);
+        const m = new T.MeshToonMaterial({ color: snowWhite, gradientMap: grad, alphaMap: tex, alphaTest: 0.97, displacementMap: tex, displacementScale: 0 });
+        roofSnowMats.push(m); capMats.push({ m, rate: 0.8 });
+        // nur der vordere Teil der Dachfläche: die Hinterkante bliebe sonst als Linie über dem First sichtbar
+        const pd = (DEP + 2 * OV) * 0.55;
+        const pl = mesh(new T.PlaneGeometry(slopeL + 6, pd, 48, 10), m, false, true); pl.rotation.x = -Math.PI / 2; pl.position.set(0, 0.15, (DEP + 2 * OV) / 2 - pd / 2); g.add(pl);
+        // Schneewulst an der Vorderkante: rund, quillt etwas über das Stirnbrett (hebt sich durch die Schattierung ab)
+        const lg = new T.CylinderGeometry(1, 1, slopeL + 2, 18, 1); lg.rotateZ(Math.PI / 2);
+        const lip = mesh(lg, m, false, true); lip.userData.front = (DEP + 2 * OV) / 2; g.add(lip);
+        domes.push(Object.assign(lip, { isLip: true }));
+      });
+      // Tanne: Schneehauben oben auf jeder Etage
+      tiers.forEach(([r, h, y]) => {
+        const c = mesh(new T.ConeGeometry(r * 0.78, h * 0.42, 18), capFir, false, true);
+        c.position.set(fir.position.x, y + h * 0.8, fir.position.z); snowLayer.add(c);
+        c.userData = { fir: true, r }; domes.push(c);
+      });
+      // Kahle Äste: Schneelinie auf eher waagerechten Ästen (drei Stufen, je nach Menge sichtbar)
+      const branchSnow = trees.map((tr) => [0.4, 0.7, 1].map((lv) => {
+        const sg = [];
+        tr.segs.concat(tr.twigs).forEach(([a, b, r0, r1]) => {
+          const d = b.clone().sub(a); const flat = 1 - Math.abs(d.y) / (d.length() || 1);
+          if (flat < 0.35 || r0 < 0.5) return;
+          const up = V(0, Math.max(r0, 0.6) * 0.75, 0);
+          sg.push([a.clone().add(up), b.clone().add(up), r0 * 0.55 * lv * flat + 0.25, r1 * 0.55 * lv * flat + 0.2]);
+        });
+        const m = mesh(tubeMesh(sg, 6), capTree, false, false); m.visible = false; tr.group.add(m); return m;
+      }));
+      // Rasen: Schneekarte
+      const GX0 = -60, GX1 = 580, GZ0 = -330, GZ1 = 60, GW = 512, GH = 312;
+      const gCan = document.createElement("canvas"); gCan.width = GW; gCan.height = GH;
+      const gCtx = gCan.getContext("2d"); gCtx.fillStyle = "#000"; gCtx.fillRect(0, 0, GW, GH);
+      const gTex = new T.CanvasTexture(gCan);
+      const gMat = new T.MeshToonMaterial({ color: snowWhite, gradientMap: grad, alphaMap: gTex, alphaTest: 0.42, displacementMap: gTex, displacementScale: 2.6 });
+      const gPlane = mesh(new T.PlaneGeometry(GX1 - GX0, GZ1 - GZ0, 220, 130), gMat, false, true);
+      gPlane.rotation.x = -Math.PI / 2; gPlane.position.set((GX0 + GX1) / 2, 0.55, (GZ0 + GZ1) / 2); snowLayer.add(gPlane);
+      const toCan = (x, z) => [(x - GX0) / (GX1 - GX0) * GW, (z - GZ0) / (GZ1 - GZ0) * GH];
+      const sheltered = (x, z) => {
+        if (x > 92 && x < 428 && z < ZH + OV && z > ZH - DEP - OV) return 1;            // unter dem Dach
+        if (z < -(GR - topY(x)) / TS + 4) return 1;                                    // hinter dem Rasen
+        let p = 0;
+        trees.forEach((tr) => { const dx = (x - tr.x) / 60, dz = (z - tr.z) / 45; if (dx * dx + dz * dz < 1) p = Math.max(p, 0.5); });
+        { const dx = (x - fir.position.x) / 28, dz = (z - fir.position.z) / 26; if (dx * dx + dz * dz < 1) p = Math.max(p, 0.75); }
+        return p;
+      };
+      const splat = (n) => {
+        gCtx.globalCompositeOperation = "lighter";
+        for (let i = 0; i < n; i++) {
+          const x = GX0 + rnd() * (GX1 - GX0), z = GZ0 + rnd() * (GZ1 - GZ0);
+          if (rnd() < sheltered(x, z)) continue;
+          const [cx, cy] = toCan(x, z), r = 1.2 + rnd() * 1.8;
+          gCtx.fillStyle = "rgba(255,255,255,0.34)"; gCtx.beginPath(); gCtx.arc(cx, cy, r, 0, 6.283); gCtx.fill();
+        }
+      };
+      if (cover > 0) splat(Math.round(cover * 26000));
+      let splatAcc = 0, texAcc = 0;
+      const footprint = (x, z, yaw) => {
+        if (cover < 0.05) return;
+        gCtx.globalCompositeOperation = "destination-out";
+        const [cx, cy] = toCan(x, z);
+        gCtx.fillStyle = "rgba(0,0,0,0.75)";
+        gCtx.beginPath(); gCtx.ellipse(cx, cy, 1.6, 1.1, yaw, 0, 6.283); gCtx.fill();
+        gTex.needsUpdate = true;
+      };
+      const tickSnowLayer = (S, t, dt) => {
+        const falling = snowPts.visible ? snowOn : 0;
+        if (S.season !== "winter") { snowLayer.visible = false; return; }
+        snowLayer.visible = true;
+        if (falling > 0.3 && cover < 1) {
+          cover = Math.min(1, cover + dt / SNOW_GROW * falling);
+          splatAcc += dt * 175 * falling;
+          if (splatAcc >= 1) { splat(Math.floor(splatAcc)); splatAcc -= Math.floor(splatAcc); }
+          texAcc += dt; if (texAcc > 0.25) { texAcc = 0; gTex.needsUpdate = true; }
+        }
+        // Hauben: Schwelle der Rauschmaske sinkt (Flecken → geschlossen), Höhe wächst
+        capMats.forEach(({ m, rate }) => { const a = c3(cover * rate, 0, 1); m.alphaTest = c3(0.97 - a * 0.9, 0.06, 0.97); m.visible = a > 0.02; });
+        // Dachschicht liegt flach auf (angehoben würde ihre Hinterkante als Linie über dem First sichtbar);
+        // die Dicke zeigt die vordere Schneekante
+        roofSnowMats.forEach((m) => { m.displacementScale = 0; });
+        domes.forEach((d) => {
+          const u = d.userData;
+          if (d.isLip) { const a = c3(cover * 0.8, 0, 1), r = 0.5 + a * 4.2; d.scale.set(1, r, r * 1.15); d.position.set(0, RT / 2 - 0.4 + r * 0.75, d.userData.front - r * 0.55); return; }
+          if (u.fir) { const a = c3(cover * 0.62, 0, 1); d.scale.set(0.8 + 0.2 * a, 0.5 + 0.5 * a, 0.8 + 0.2 * a); return; }
+          const a = c3(cover * u.rate, 0, 1);
+          d.scale.set(u.rx * (0.85 + 0.15 * a), 0.3 + u.maxH * a, u.rz * (0.85 + 0.15 * a));
+        });
+        branchSnow.forEach((lvls) => { const a = c3(cover * 0.7, 0, 1); lvls.forEach((m, i) => { m.visible = a > [0.12, 0.45, 0.78][i] && (i === 2 || a <= [0.45, 0.78, 2][i]); }); });
+      };
       // Kaminrauch
       const puffs3 = Array.from({ length: 16 }, () => { const m = mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), color: 0xb8c0cc, transparent: true, opacity: 0, depthWrite: false })); m.visible = false; add(m); return { m, age: 99, life: 6 }; });
       let smokeAcc = 0;
@@ -1276,6 +1420,7 @@
         tickLeaves(S.season, t, dt);
         tickSmoke(S, t, dt);
         tickSnow(S, t, dt, k);
+        tickSnowLayer(S, t, dt);
         deco.visible = S.season === "winter" && S.xmas;
         if (deco.visible) {
           const nf = S.isDay ? 0.3 : 1;
@@ -1283,7 +1428,7 @@
           starGlow.material.opacity = (0.35 + 0.1 * Math.sin(t * 1.7)) * (S.isDay ? 0.4 : 1);
         }
       };
-      return { update, spots, ownsLights: true, sun, lamp: { light: lampLight, on: () => lampOn } };
+      return { update, spots, ownsLights: true, sun, lamp: { light: lampLight, on: () => lampOn }, footprint };
     }
 
     let _glowTex = null;
@@ -1566,6 +1711,12 @@
             st.yawV = (st.yawV || 0) + ((st.yawT - st.yaw) * 26 - (st.yawV || 0) * 9.5) * dt;
             st.yaw = c3(st.yaw + st.yawV * dt, -185, 5);
             st.walkAmt += (((moving ? 1 : 0) + (turning ? 0.55 : 0)) - st.walkAmt) * (1 - Math.exp(-dt / 0.22));
+            // Hufspuren im liegenden Schnee
+            if (S3 && moving && t - (st.lastPrint || 0) > 0.2) {
+              st.lastPrint = t; st.printSide = !st.printSide;
+              const fx = face() > 0 ? 1 : -1, off = st.printSide ? 7 : -9;
+              S3.footprint(st.x + fx * off, st.printSide ? 2.6 : -2.6, 0);
+            }
 
             // Schmetterling
             const bf = st.bf;
