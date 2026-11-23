@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.24.0
+  Version: 1.25.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.24.0";
+    const FRONTEND_VERSION = "1.25.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -1099,6 +1099,89 @@
         if (n) { fallMesh.instanceMatrix.needsUpdate = true; fallMesh.instanceColor.needsUpdate = true; }
         trees.forEach((tr, i) => { tr.crown.rotation.z = Math.sin(t * 0.5 + i * 2) * 0.008; tr.crown.position.x = Math.sin(t * 0.5 + i * 2) * 0.6; });
       };
+      // ── Schneefall im Raum (Winter): Punkt-Sprites, Bewegung auf der GPU ──
+      // Flocken fallen von weit hinter dem Haus bis knapp vor die Kamera; Haus, Bäume und Reh verdecken
+      // die Flocken dahinter (Tiefentest). Meist Hinter-/Mittelgrund, vorn nur wenige große, weiche Flocken.
+      // Drei Formen (weicher Bausch, Klümpchen, zarter Stern), Taumeln, Pendeln, leichter Wind.
+      const snowTex = (() => {
+        const c = document.createElement("canvas"); c.width = 192; c.height = 64; const g = c.getContext("2d");
+        const soft = (x, y, r, a) => { const gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, "rgba(255,255,255," + a + ")"); gr.addColorStop(0.55, "rgba(255,255,255," + a * 0.75 + ")"); gr.addColorStop(1, "rgba(255,255,255,0)"); g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 6.283); g.fill(); };
+        soft(32, 32, 22, 1); soft(26, 28, 12, 0.6); soft(39, 36, 11, 0.5);                                    // Bausch
+        soft(96, 32, 15, 1); soft(84, 27, 11, 0.9); soft(108, 37, 10, 0.85); soft(100, 22, 9, 0.8); soft(88, 41, 8, 0.7);   // Klümpchen
+        g.strokeStyle = "rgba(255,255,255,0.95)"; g.lineCap = "round";
+        for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3; g.lineWidth = 5; g.beginPath(); g.moveTo(160, 32); g.lineTo(160 + Math.cos(a) * 21, 32 + Math.sin(a) * 21); g.stroke();
+          g.lineWidth = 3; [0.55].forEach((f) => { const bx = 160 + Math.cos(a) * 21 * f, by = 32 + Math.sin(a) * 21 * f; [-0.7, 0.7].forEach((o) => { g.beginPath(); g.moveTo(bx, by); g.lineTo(bx + Math.cos(a + o) * 8, by + Math.sin(a + o) * 8); g.stroke(); }); }); }
+        soft(160, 32, 9, 0.9);                                                                                  // Stern
+        const t = new T.CanvasTexture(c); return t;
+      })();
+      const SNOW_N = 900;
+      const sStart = new Float32Array(SNOW_N * 3), sSpeed = new Float32Array(SNOW_N), sSize = new Float32Array(SNOW_N);
+      const sPhase = new Float32Array(SNOW_N), sShape = new Float32Array(SNOW_N), sAlpha = new Float32Array(SNOW_N);
+      for (let i = 0; i < SNOW_N; i++) {
+        const r = rnd(), near = r > 0.955, mid = r > 0.72;
+        const z = near ? -10 + rnd() * 70 : mid ? -125 + rnd() * 110 : -400 + rnd() * 275;
+        sStart[i * 3] = -60 + rnd() * 640; sStart[i * 3 + 1] = rnd() * 360; sStart[i * 3 + 2] = z;
+        sSpeed[i] = (near ? 15 : 9) + rnd() * 7;
+        sSize[i] = near ? 5 + rnd() * 3 : 1.8 + rnd() * 2.4;
+        sPhase[i] = rnd() * 100; sShape[i] = Math.floor(rnd() * 3);
+        sAlpha[i] = near ? 0.45 : 0.75 + rnd() * 0.25;
+      }
+      const sGeo = new T.BufferGeometry();
+      sGeo.setAttribute("position", new T.BufferAttribute(new Float32Array(SNOW_N * 3), 3));
+      sGeo.setAttribute("aStart", new T.BufferAttribute(sStart, 3)); sGeo.setAttribute("aSpeed", new T.BufferAttribute(sSpeed, 1));
+      sGeo.setAttribute("aSize", new T.BufferAttribute(sSize, 1)); sGeo.setAttribute("aPhase", new T.BufferAttribute(sPhase, 1));
+      sGeo.setAttribute("aShape", new T.BufferAttribute(sShape, 1)); sGeo.setAttribute("aAlpha", new T.BufferAttribute(sAlpha, 1));
+      const sMat = new T.ShaderMaterial({
+        transparent: true, depthWrite: false,
+        uniforms: { uTime: { value: 0 }, uScale: { value: 400 }, uTex: { value: snowTex }, uColor: { value: new T.Color(0xffffff) }, uOpacity: { value: 0 },
+                    uLamp: { value: lampLight.position.clone() }, uLampOn: { value: 0 } },
+        vertexShader: `
+          attribute vec3 aStart; attribute float aSpeed, aSize, aPhase, aShape, aAlpha;
+          uniform float uTime, uScale;
+          varying float vShape, vAlpha, vRot, vLamp; uniform vec3 uLamp;
+          void main() {
+            vec3 p = aStart;
+            p.y = mod(aStart.y - uTime * aSpeed, 360.0) - 8.0;
+            float sw = sin(uTime * (0.5 + fract(aPhase) * 0.6) + aPhase) * (4.0 + fract(aPhase * 7.0) * 6.0);
+            p.x = mod(aStart.x + sw + uTime * 2.5 + 60.0, 640.0) - 60.0;
+            p.z += cos(uTime * 0.4 + aPhase) * 3.0;
+            vShape = aShape; vRot = aPhase + uTime * (0.4 + fract(aPhase * 3.0)) * (fract(aPhase * 5.0) > 0.5 ? 1.0 : -1.0);
+            vec4 mv = modelViewMatrix * vec4(p, 1.0);
+            gl_Position = projectionMatrix * mv;
+            gl_PointSize = aSize * uScale / -mv.z;
+            // sanft ein-/ausblenden am Boden, fern etwas blasser (Dunst)
+            vAlpha = aAlpha * smoothstep(-6.0, 6.0, p.y) * mix(1.0, 0.6, smoothstep(-150.0, -400.0, p.z));
+            float d = distance(p, uLamp);
+            vLamp = smoothstep(150.0, 20.0, d);
+          }`,
+        fragmentShader: `
+          uniform sampler2D uTex; uniform vec3 uColor; uniform float uOpacity, uLampOn;
+          varying float vShape, vAlpha, vRot, vLamp;
+          void main() {
+            vec2 q = gl_PointCoord - 0.5; float c = cos(vRot), s = sin(vRot);
+            q = vec2(c * q.x - s * q.y, s * q.x + c * q.y) + 0.5;
+            vec4 tx = texture2D(uTex, vec2((q.x + vShape) / 3.0, 1.0 - q.y));
+            float a = tx.a * vAlpha * uOpacity;
+            if (a < 0.01) discard;
+            vec3 col = mix(uColor, vec3(1.0, 0.86, 0.62), vLamp * uLampOn);
+            gl_FragColor = vec4(col, a * (1.0 + vLamp * uLampOn * 1.2));
+          }`,
+      });
+      const snowPts = new T.Points(sGeo, sMat); snowPts.frustumCulled = false; snowPts.visible = false; snowPts.renderOrder = 5; add(snowPts);
+      let snowOn = 0;
+      const tickSnow = (S, t, dt, k) => {
+        const want = S.season === "winter" ? 1 : 0;
+        snowOn += (want - snowOn) * Math.min(1, dt * 0.6);
+        snowPts.visible = snowOn > 0.01;
+        if (!snowPts.visible) return;
+        const night = S.slotName === "Nachts", dusk = S.slotName === "Abends" || S.slotName === "Morgens";
+        sMat.uniforms.uTime.value = t;
+        sMat.uniforms.uOpacity.value = snowOn * (night ? 0.55 : dusk ? 0.75 : 0.95);
+        sMat.uniforms.uColor.value.setHex(night ? 0xb4c2e0 : dusk ? 0xe6dce8 : 0xffffff);
+        sMat.uniforms.uLampOn.value = lampOn;
+        const h = renderer.domElement.height;
+        sMat.uniforms.uScale.value = h * 0.5 * (scene.userData.projY || 5);
+      };
       // Kaminrauch
       const puffs3 = Array.from({ length: 16 }, () => { const m = mesh(PL, new T.MeshBasicMaterial({ map: glowTex(), color: 0xb8c0cc, transparent: true, opacity: 0, depthWrite: false })); m.visible = false; add(m); return { m, age: 99, life: 6 }; });
       let smokeAcc = 0;
@@ -1192,6 +1275,7 @@
         if (S.season !== seasonNow) { seasonNow = S.season; applySeason(S.season); }
         tickLeaves(S.season, t, dt);
         tickSmoke(S, t, dt);
+        tickSnow(S, t, dt, k);
         deco.visible = S.season === "winter" && S.xmas;
         if (deco.visible) {
           const nf = S.isDay ? 0.3 : 1;
@@ -1250,6 +1334,7 @@
             const n = pc.near;
             pc.projectionMatrix.makePerspective(-260 * n / D, 260 * n / D, 290 * n / D, -30 * n / D, n, pc.far);
             pc.projectionMatrixInverse.copy(pc.projectionMatrix).invert();
+            scene.userData.projY = pc.projectionMatrix.elements[5];
             cam = pc;
             // Szene bringt eigenes Licht und Schatten mit: Reh wirft echten Schatten, Klecks-Schatten nur noch zart
             J.root.traverse((c) => { if (c.isMesh && c !== J.shadow) c.castShadow = true; });
