@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.29.0
+  Version: 1.29.1
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.29.0";
+    const FRONTEND_VERSION = "1.29.1";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -1347,7 +1347,8 @@
 
       // ── Stimmung je Tageszeit: Licht und Dunst ──
       const MOOD = {
-        Nachts:      { hs: 0x2a3656, hg: 0x0a0e16, hi: 0.42, sc: 0x9fb4ff, si: 0.22, far: 0x141d30, near: 0x101827, tree: 0x0f1622 },
+        // nachts: weiches Himmelslicht statt gerichtetem Mondlicht → nur zarte Schatten
+        Nachts:      { hs: 0x2a3656, hg: 0x0e1420, hi: 0.53, sc: 0x9fb4ff, si: 0.07, far: 0x141d30, near: 0x101827, tree: 0x0f1622 },
         Morgens:     { hs: 0x7a6286, hg: 0x221c1e, hi: 0.52, sc: 0xffb27a, si: 0.52, far: 0x5a4a6a, near: 0x40384e, tree: 0x3a3248 },
         Vormittags:  { hs: 0xc2d6f0, hg: 0x4a5a3a, hi: 0.7, sc: 0xfff0d6, si: 0.72, far: 0x8aa8c4, near: 0x6f94a6, tree: 0x6a8ca0 },
         Mittags:     { hs: 0xd0e2f6, hg: 0x506040, hi: 0.74, sc: 0xfff8ea, si: 0.76, far: 0x96b6d0, near: 0x7aa0b0, tree: 0x739aab },
