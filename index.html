@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   Weckrain Frontend — index.html
-  Version: 1.28.0
+  Version: 1.29.0
   Last updated: 2026-11-22
   Source of truth: /VERSIONS.json
 -->
@@ -62,7 +62,7 @@
     const API_URL = "https://script.google.com/macros/s/AKfycbwNSH79BZ48JJ9WuQvO2kXBT3PYZ72NJfZYofaQ8CSOcrjxr6gVu9mwaftNovFf1CO5/exec";
 
     // Frontend-Version — wird im Footer angezeigt. Bei jedem Release mit /VERSIONS.json synchron halten.
-    const FRONTEND_VERSION = "1.28.0";
+    const FRONTEND_VERSION = "1.29.0";
     // ═════════════════════════════════════════════════════════════════════
 
     // ─── RESPONSIVE HOOK ─────────────────────────────────────────────────
@@ -603,7 +603,7 @@
       mat.needsUpdate = true;
     }
 
-    // ─── 3D-SZENE (Vorschau, Standard im Karsten-Modus) ─────────────────────
+    // ─── 3D-SZENE (Standard für alle) ───────────────────────────────────────
     // Haus, Garten und Bäume als echte 3D-Objekte im selben Canvas wie das Reh.
     // Gleiche Kamera wie das Reh (orthografisch, 10° von oben). Die Hausfront liegt so in der Tiefe,
     // dass sie pixelgenau dort erscheint, wo sie im SVG lag; Zaun, Büsche, Bäume stehen davor.
@@ -611,10 +611,10 @@
     function scenePreviewOn() {
       try {
         const q = new URLSearchParams(window.location.search).get("szene");
-        // Standard im Karsten-Modus (Vorschau). ?szene=2d schaltet auf diesem Gerät zurück, ?szene=3d wieder an.
+        // Standard für alle. ?szene=2d schaltet auf diesem Gerät zurück zur klassischen Ansicht, ?szene=3d wieder an.
         if (q === "2d") localStorage.setItem("wetter_szene", "2d");
         if (q === "3d") localStorage.removeItem("wetter_szene");
-        return localStorage.getItem("wetter_szene") !== "2d" && localStorage.getItem("wetter_mode") === "karsten";
+        return localStorage.getItem("wetter_szene") !== "2d";
       } catch (e) { return false; }
     }
 
@@ -1660,6 +1660,7 @@
             CAM3.perm = true;
             const DOE = window.DeviceOrientationEvent;
             if (typeof DOE.requestPermission === "function") {
+              // iOS fragt einmal nach Erlaubnis (beim ersten Tippen auf die Szene), für alle (Karstens Entscheidung)
               DOE.requestPermission().then((r) => { if (r === "granted") window.addEventListener("deviceorientation", onOrient); }).catch(() => {});
             } else window.addEventListener("deviceorientation", onOrient);
           };
